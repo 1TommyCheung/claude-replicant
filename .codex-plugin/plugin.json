@@ -1,0 +1,28 @@
+{
+  "name": "claude-replicant",
+  "version": "0.1.0",
+  "description": "Capture, validate, plan, and safely restore repository migration capsules.",
+  "author": {
+    "name": "1TommyCheung",
+    "url": "https://github.com/1TommyCheung"
+  },
+  "homepage": "https://github.com/1TommyCheung/claude-replicant",
+  "repository": "https://github.com/1TommyCheung/claude-replicant",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Claude Replicant",
+    "shortDescription": "Safely migrate a selected Git repository.",
+    "longDescription": "Claude Replicant creates integrity-checked repository capsules, validates them, produces dry-run restore plans, and restores only to a new explicitly approved destination.",
+    "developerName": "1TommyCheung",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Back up a selected repository to a capsule store.",
+      "Validate an existing repository capsule.",
+      "Plan a safe restore to a new destination."
+    ]
+  }
+}

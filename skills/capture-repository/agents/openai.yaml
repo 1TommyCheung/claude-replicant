@@ -1,0 +1,3 @@
+interface:
+  display_name: "Capture Repository"
+  short_description: "Safely capture and restore one Git repository"

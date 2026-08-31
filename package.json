@@ -1,0 +1,18 @@
+{
+  "name": "claude-replicant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Safe repository-data migration capsules for Claude Code projects",
+  "bin": {
+    "claude-replicant": "./src/cli.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:e2e": "node --test test/e2e.test.mjs",
+    "smoke": "node test/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  }
+}
