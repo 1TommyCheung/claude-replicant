@@ -25,6 +25,7 @@ import {
 import {
   applyFileMetadata,
   captureTree,
+  isPlatformMetadata,
   probeFilesystem,
   verifyTree,
   walkTree,
@@ -310,6 +311,39 @@ function filterStatusForPolicyExclusions(snapshot, excludedPaths) {
   };
 }
 
+function indexedGitPaths(manifest) {
+  return new Set((manifest.git?.after?.indexEntries ?? '')
+    .split('\n')
+    .map((line) => {
+      const separator = line.indexOf('\t');
+      return separator === -1 ? null : line.slice(separator + 1);
+    })
+    .filter(Boolean));
+}
+
+function isIgnorableManifestPlatformMetadata({ entry, root, indexedPaths }) {
+  if (entry.kind !== 'file' || !isPlatformMetadata(entry.logicalPath)) return false;
+  if (root === 'claude-home') return true;
+  if (entry.tracked === true) return false;
+  if (entry.tracked === false) return true;
+  return !indexedPaths.has(entry.logicalPath);
+}
+
+function restorableEntries(manifest) {
+  const indexedPaths = indexedGitPaths(manifest);
+  const repository = (manifest.entries ?? []).filter((entry) => !isIgnorableManifestPlatformMetadata({
+    entry,
+    root: 'repository',
+    indexedPaths,
+  }));
+  const agent = (manifest.agentState?.entries ?? []).filter((entry) => !isIgnorableManifestPlatformMetadata({
+    entry,
+    root: 'claude-home',
+    indexedPaths,
+  }));
+  return { repository, agent };
+}
+
 async function initializeCapsuleRoot(store) {
   await mkdir(store, { recursive: true, mode: 0o700 });
   await mkdir(path.join(store, CAPSULE_FOLDER), { recursive: true, mode: 0o700 });
@@ -464,7 +498,9 @@ export async function captureRepository({
     const gitAfter = await captureGitSnapshot(source, git);
     const gitStable = gitBefore.snapshotDigest === gitAfter.snapshotDigest;
     const excludedPaths = captured.inventory
-      .filter((record) => record.decision === 'excluded' && record.sensitivity === 'credential')
+      .filter((record) => record.decision === 'excluded' && (
+        record.sensitivity === 'credential' || record.reason === 'platform-metadata-policy'
+      ))
       .map((record) => record.logicalPath);
     const expectedGitBefore = filterStatusForPolicyExclusions(comparableGitSnapshot(gitBefore), excludedPaths);
     const expectedGitAfter = filterStatusForPolicyExclusions(comparableGitSnapshot(gitAfter), excludedPaths);
@@ -630,6 +666,7 @@ export async function validateCapsule(capsuleInput) {
     { name: 'repository', entries: manifest.entries ?? [], payloadRoot: 'payload/repository' },
     { name: 'claude-home', entries: manifest.agentState?.entries ?? [], payloadRoot: 'payload/claude-home' },
   ];
+  const indexedPaths = indexedGitPaths(manifest);
   const seenPayloads = new Set();
   for (const { name, entries } of entryGroups) {
     const seen = new Set();
@@ -652,6 +689,16 @@ export async function validateCapsule(capsuleInput) {
       continue;
     }
     const stats = await lstat(payload).catch(() => null);
+    if (isIgnorableManifestPlatformMetadata({ entry, root: name, indexedPaths })) {
+      const actualDigest = stats?.isFile() ? await sha256File(payload) : null;
+      warnings.push({
+        code: 'ignored-manifest-platform-metadata',
+        root: name,
+        path: entry.logicalPath,
+        state: !stats ? 'missing' : actualDigest === entry.sha256 ? 'unchanged' : 'modified',
+      });
+      continue;
+    }
     if (!stats) {
       errors.push({ code: 'missing-payload', root: name, path: entry.logicalPath });
       continue;
@@ -676,12 +723,22 @@ export async function validateCapsule(capsuleInput) {
     const payloadRoot = path.join(capsule, ...group.payloadRoot.split('/'));
     const expected = new Set(group.entries.map((entry) => entry.logicalPath));
     if (await pathExists(payloadRoot)) {
-    const payloadEntries = (await walkTree(payloadRoot)).map((entry) => entry.logicalPath);
-    for (const extra of payloadEntries) {
-      if (!expected.has(extra)) errors.push({ code: 'unreferenced-payload', root: group.name, path: extra });
-    }
-  } else {
-    errors.push({ code: 'missing-payload-root', root: group.name });
+      const payloadEntries = await walkTree(payloadRoot);
+      for (const extra of payloadEntries) {
+        if (expected.has(extra.logicalPath)) continue;
+        const stats = await lstat(extra.absolutePath).catch(() => null);
+        if (stats?.isFile() && isPlatformMetadata(extra.logicalPath)) {
+          warnings.push({
+            code: 'ignored-unreferenced-platform-metadata',
+            root: group.name,
+            path: extra.logicalPath,
+          });
+        } else {
+          errors.push({ code: 'unreferenced-payload', root: group.name, path: extra.logicalPath });
+        }
+      }
+    } else {
+      errors.push({ code: 'missing-payload-root', root: group.name });
     }
   }
 
@@ -739,6 +796,7 @@ export async function createRestorePlan({
   const validation = await validateCapsule(capsule);
   const portableValidation = { ...validation, capsulePath: '$CAPSULE_ROOT' };
   const manifest = await readJson(path.join(capsule, 'manifest.json'));
+  const effectiveEntries = restorableEntries(manifest);
   const blockers = [];
   if (!validation.valid) blockers.push({ code: 'capsule-invalid', errors: validation.errors });
   if (manifest.readiness.domains.repositoryData.status === 'not-ready') {
@@ -757,19 +815,19 @@ export async function createRestorePlan({
   const probe = await destinationProbe(destination);
   const claudeProbe = await destinationProbe(claudeDestination);
   if (!probe.capabilities.atomicRename) blockers.push({ code: 'destination-atomic-rename-unavailable' });
-  if (!probe.capabilities.symlink && manifest.entries.some((entry) => entry.kind === 'symlink')) {
+  if (!probe.capabilities.symlink && effectiveEntries.repository.some((entry) => entry.kind === 'symlink')) {
     blockers.push({ code: 'destination-symlink-unavailable' });
   }
   if (!claudeProbe.capabilities.atomicRename) blockers.push({ code: 'claude-destination-atomic-rename-unavailable' });
-  if (!claudeProbe.capabilities.symlink && (manifest.agentState?.entries ?? []).some((entry) => entry.kind === 'symlink')) {
+  if (!claudeProbe.capabilities.symlink && effectiveEntries.agent.some((entry) => entry.kind === 'symlink')) {
     blockers.push({ code: 'claude-destination-symlink-unavailable' });
   }
-  const destinationCollisions = collisionFindings(manifest.entries, probe);
+  const destinationCollisions = collisionFindings(effectiveEntries.repository, probe);
   blockers.push(...destinationCollisions.map((finding) => ({
     code: `destination-${finding.code}`,
     paths: finding.paths,
   })));
-  const mappedAgentEntries = (manifest.agentState?.entries ?? []).map((entry) => ({
+  const mappedAgentEntries = effectiveEntries.agent.map((entry) => ({
     ...entry,
     sourceLogicalPath: entry.logicalPath,
     logicalPath: restoredClaudeLogicalPath(
@@ -794,18 +852,18 @@ export async function createRestorePlan({
         code: `destination-capability-variance:${capability}`,
         value,
       })),
-    ...manifest.entries
+    ...effectiveEntries.repository
       .filter((entry) => (entry.metadata?.sourceSpecialMode ?? 0) !== 0)
       .map((entry) => ({
         code: 'metadata-variance:special-mode-bits-not-applied',
         path: entry.logicalPath,
         sourceSpecialMode: entry.metadata.sourceSpecialMode,
       })),
-    ...manifest.entries
+    ...effectiveEntries.repository
       .filter((entry) => entry.kind === 'symlink' && entry.targetClass !== 'relative-in-scope')
       .map((entry) => ({ code: 'symlink-portability-risk', path: entry.logicalPath, targetClass: entry.targetClass })),
   ];
-  const operations = manifest.entries.map((entry) => ({
+  const operations = effectiveEntries.repository.map((entry) => ({
     operation: entry.kind === 'directory'
       ? 'mkdir'
       : entry.kind === 'symlink'
@@ -898,7 +956,11 @@ async function applyEntry({ capsule, staging, entry, hardlinks, variances }) {
 
 async function verifyGitAfterRestore({ destination, manifest, git }) {
   const snapshot = await captureGitSnapshot(destination, git);
-  const expected = manifest.git.after;
+  const restorablePaths = new Set(restorableEntries(manifest).repository.map((entry) => entry.logicalPath));
+  const ignoredPaths = (manifest.entries ?? [])
+    .filter((entry) => !restorablePaths.has(entry.logicalPath))
+    .map((entry) => entry.logicalPath);
+  const expected = filterStatusForPolicyExclusions(manifest.git.after, ignoredPaths);
   const actual = comparableGitSnapshot(snapshot);
   const fields = ['head', 'symbolicHead', 'refs', 'status', 'indexEntries', 'indexDigest'];
   const mismatches = fields
@@ -964,6 +1026,7 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
     throw new Error('Receipt path must be outside the restored Claude home.');
   }
   const manifest = await readJson(path.join(planCapsule, 'manifest.json'));
+  const effectiveEntries = restorableEntries(manifest);
   const sessionCatalog = await readJson(path.join(planCapsule, 'sessions.json'));
   const git = await probeGit(plan.git?.path ?? manifest.git.prerequisite.path);
   const parent = path.dirname(plan.destination);
@@ -975,13 +1038,13 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
   if (!currentProbe.capabilities.atomicRename) {
     throw new Error('Destination no longer passes the atomic rename capability probe.');
   }
-  if (!currentProbe.capabilities.symlink && manifest.entries.some((entry) => entry.kind === 'symlink')) {
+  if (!currentProbe.capabilities.symlink && effectiveEntries.repository.some((entry) => entry.kind === 'symlink')) {
     throw new Error('Destination no longer supports required symbolic links.');
   }
   if (!currentClaudeProbe.capabilities.atomicRename) {
     throw new Error('Claude destination no longer passes the atomic rename capability probe.');
   }
-  if (!currentClaudeProbe.capabilities.symlink && manifest.agentState.entries.some((entry) => entry.kind === 'symlink')) {
+  if (!currentClaudeProbe.capabilities.symlink && effectiveEntries.agent.some((entry) => entry.kind === 'symlink')) {
     throw new Error('Claude destination no longer supports required symbolic links.');
   }
   const staging = path.join(parent, `.claude-replicant-restore-${manifest.packageId}-${randomUUID()}`);
@@ -1005,7 +1068,7 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
   }
   const variances = [...plan.declaredVariances];
   const startedAt = isoNow();
-  const mappedAgentEntries = manifest.agentState.entries.map((entry) => ({
+  const mappedAgentEntries = effectiveEntries.agent.map((entry) => ({
     ...entry,
     sourceLogicalPath: entry.logicalPath,
     logicalPath: restoredClaudeLogicalPath(entry.logicalPath, manifest.agentState.projectKey, plan.destination),
@@ -1014,10 +1077,10 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
   await mkdir(staging, { mode: 0o700 });
   await mkdir(claudeStaging, { mode: 0o700 });
   try {
-    await applyTreeEntries({ capsule: planCapsule, staging, entries: manifest.entries, variances });
+    await applyTreeEntries({ capsule: planCapsule, staging, entries: effectiveEntries.repository, variances });
     await applyTreeEntries({ capsule: planCapsule, staging: claudeStaging, entries: mappedAgentEntries, variances });
 
-    const treeVerification = await verifyTree(staging, manifest.entries);
+    const treeVerification = await verifyTree(staging, effectiveEntries.repository);
     if (!treeVerification.valid) {
       throw new Error(`Restored tree verification failed: ${JSON.stringify(treeVerification.errors)}`);
     }
@@ -1059,7 +1122,7 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
       await rename(plan.claudeDestination, claudeStaging).catch(() => {});
       throw error;
     }
-    const postRenameTree = await verifyTree(plan.destination, manifest.entries);
+    const postRenameTree = await verifyTree(plan.destination, effectiveEntries.repository);
     const postRenameGit = await verifyGitAfterRestore({ destination: plan.destination, manifest, git });
     const postRenameAgent = await verifyTree(plan.claudeDestination, pathRemap.runtimeEntries);
     if (!postRenameTree.valid || !postRenameGit.valid || !postRenameAgent.valid) {

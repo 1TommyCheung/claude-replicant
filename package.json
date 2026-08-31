@@ -1,6 +1,6 @@
 {
   "name": "claude-replicant",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "private": true,
   "type": "module",
   "description": "Restorable repository and Claude Code state migration capsules",

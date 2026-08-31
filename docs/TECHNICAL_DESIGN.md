@@ -1,6 +1,6 @@
 # Claude Replicant: Technical Design
 
-Specification version: 0.4.3
+Specification version: 0.4.4
 
 Status: Part 1 implemented; Part 2 analysis and gold-standard cross-agent work remains planned
 
@@ -438,7 +438,8 @@ Bun ships as a single executable and documents verification through `bun --versi
 Validation is independent of capture and can run offline.
 
 - SHA-256 is the baseline digest over the exact stored bytes of every payload and report; the manifest itself receives a package-root digest using a defined canonicalization procedure.
-- Every referenced payload must exist exactly once, and every payload must be referenced. Duplicate logical paths, absolute paths, `..`, unsafe symlinks, device files, sockets, and archive traversal are rejected.
+- Every referenced payload must exist exactly once, and every payload must be referenced. Duplicate logical paths, absolute paths, `..`, unsafe symlinks, device files, sockets, and archive traversal are rejected. The platform-metadata exception is limited to regular files with the exact basename `.DS_Store`: an unreferenced instance added after finalization emits `ignored-unreferenced-platform-metadata`; a legacy manifest entry that was not Git-tracked emits `ignored-manifest-platform-metadata`. Neither form is restored, and validation leaves the manifest and payload untouched. A directory, symlink, or Git-tracked file with that name is not exempt.
+- Capture excludes untracked regular `.DS_Store` files as platform metadata and omits them from expected restored Git status. A tracked `.DS_Store` remains canonical repository content and is hash-verified like any other referenced payload.
 - Derived packages record parent package IDs, parent manifest digests, derivation policy, transformation tool version, and source-to-output lineage.
 - Validation distinguishes **integrity** (bytes match), **authenticity** (optional trusted signature), **policy compliance** (declared rules passed), and **safety** (never guaranteed by hashes).
 - A validator emits `validation.json` with errors, warnings, validated schema range, and timestamp. Invalid packages are not passed to an agent or restore executor.

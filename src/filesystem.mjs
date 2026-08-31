@@ -64,6 +64,10 @@ export function secretPathReason(logicalPath) {
   return null;
 }
 
+export function isPlatformMetadata(logicalPath) {
+  return path.posix.basename(logicalPath) === '.DS_Store';
+}
+
 export async function secretContentReason(filePath, size) {
   if (size > MAX_SCAN_BYTES) return null;
   const bytes = await readFile(filePath);
@@ -221,6 +225,16 @@ export async function captureTree({
     }
 
     if (stats.isFile()) {
+      if (isPlatformMetadata(logicalPath) && !tracked.has(logicalPath)) {
+        inventory.push({
+          ...baseRecord,
+          metadata: undefined,
+          decision: 'excluded',
+          reason: 'platform-metadata-policy',
+        });
+        continue;
+      }
+
       const pathSecret = scanSecrets ? secretPathReason(logicalPath) : null;
       const contentSecret = scanSecrets && !pathSecret
         ? await secretContentReason(absolutePath, Number(stats.size))
@@ -293,6 +307,7 @@ export async function captureTree({
       const record = {
         ...baseRecord,
         kind: 'file',
+        tracked: tracked.has(logicalPath),
         sha256: digest,
         payloadPath: `${payloadPrefix}/${logicalPath}`,
         hardlinkGroup,

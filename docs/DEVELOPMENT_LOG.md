@@ -2,6 +2,29 @@
 
 This log records how Claude Replicant evolved, why major design choices were made, and what evidence supports the current implementation. The changelog is the concise user-facing release record; this document is the engineering narrative.
 
+## 2026-09-01 — v0.4.4 Finder metadata validation fix
+
+### Failure
+
+A captured capsule failed validation after four `.DS_Store` files appeared under `payload/claude-home`. The files were not in the manifest, so the validator correctly identified them as unreferenced payload, but treated disposable Finder metadata as equivalent to undeclared restorable content.
+
+### Root cause
+
+macOS Finder can create `.DS_Store` files when browsing a directory after capture finalization or transfer. The manifest is authoritative and restore reads only manifest entries, so these regular files cannot affect restored state. The validator nevertheless enforced byte-for-byte directory closure without a platform-metadata exception. Capture also copied untracked `.DS_Store` files and included them in Git status expectations.
+
+### Fix and safety boundary
+
+- Exclude untracked regular `.DS_Store` files during future repository and Claude-state captures and record the exclusion as `platform-metadata-policy` in the inventory.
+- Remove those policy-excluded paths from the expected restored Git status.
+- During validation, downgrade only an unreferenced regular file whose exact basename is `.DS_Store` to `ignored-unreferenced-platform-metadata`.
+- For legacy manifests, identify repository `.DS_Store` entries absent from the captured Git index (and Claude-home `.DS_Store` entries) as non-restorable platform metadata. Report them as `ignored-manifest-platform-metadata`, omit them from restore operations, and remove their untracked/ignored lines from expected Git status.
+- Do not delete the file, rewrite the capsule, or edit its manifest.
+- Continue rejecting every other unreferenced file, every unreferenced directory or symlink (including one named `.DS_Store`), and any hash change to a manifest-referenced `.DS_Store`.
+
+### Regression coverage
+
+The end-to-end fixture covers all four reported paths, verifies capture-time exclusion, recreates the files after finalization, simulates a legacy manifest whose untracked `.DS_Store` changed after capture, proves that an unrelated undeclared file still blocks restore, proves tracked metadata remains canonical, and completes transferred restore and Git-state verification without restoring disposable metadata.
+
 ## 2026-09-01 — v0.4.3 operational examples
 
 - Added agent-ready installation prompts for Codex and Claude Code.

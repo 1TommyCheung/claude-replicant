@@ -28,7 +28,7 @@ import {
   validateCapsule,
 } from '../src/core.mjs';
 import { previewClaudeState } from '../src/claude-state.mjs';
-import { readJson, writeJsonAtomic } from '../src/util.mjs';
+import { digestObject, readJson, sha256File, writeJsonAtomic } from '../src/util.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -92,6 +92,8 @@ async function createFixture(root) {
   await writeFile(path.join(repository, 'src', 'work.txt'), 'base\n');
   await writeFile(path.join(repository, 'unicodé-測試.txt'), 'unicode\n');
   await writeFile(path.join(repository, 'hardlink-a.txt'), 'hardlink\n');
+  await mkdir(path.join(repository, '.tracked'), { recursive: true });
+  await writeFile(path.join(repository, '.tracked', '.DS_Store'), 'tracked repository metadata\n');
   await link(path.join(repository, 'hardlink-a.txt'), path.join(repository, 'hardlink-b.txt'));
   await symlink('src/work.txt', path.join(repository, 'relative-link'));
   await symlink('/tmp/claude-replicant-outside', path.join(repository, 'absolute-link'));
@@ -102,6 +104,7 @@ async function createFixture(root) {
   await git(repository, ['add', 'src/work.txt']);
   await appendFile(path.join(repository, 'src', 'work.txt'), 'unstaged\n');
   await writeFile(path.join(repository, 'untracked-notes.txt'), 'untracked\n');
+  await writeFile(path.join(repository, '.DS_Store'), 'repository finder metadata\n');
   await writeFile(path.join(repository, 'generated', 'output.txt'), 'ignored generated\n');
   await writeFile(path.join(repository, '.env'), 'API_KEY=fake_fixture_secret_123456789\n');
 
@@ -134,6 +137,16 @@ async function createFixture(root) {
   await mkdir(path.join(claudeHome, 'agents'), { recursive: true });
   await mkdir(path.join(claudeHome, 'skills', 'fixture-skill'), { recursive: true });
   await mkdir(path.join(claudeHome, 'plans'), { recursive: true });
+  const pluginNodeModules = path.join(
+    claudeHome,
+    'plugins',
+    'cache',
+    'claude-plugins-official',
+    'chrome-devtools-mcp',
+    '1.7.0',
+    'node_modules',
+  );
+  await mkdir(pluginNodeModules, { recursive: true });
   await writeFile(path.join(claudeHome, 'CLAUDE.md'), 'Global Claude instructions.\n');
   await writeFile(path.join(claudeHome, 'settings.json'), '{"theme":"dark"}\n');
   await writeFile(path.join(claudeHome, '.claude.json'), '{"shadowConfig":"must-not-win"}\n');
@@ -142,6 +155,11 @@ async function createFixture(root) {
   await writeFile(path.join(claudeHome, 'agents', 'reviewer.md'), 'Review agent.\n');
   await writeFile(path.join(claudeHome, 'skills', 'fixture-skill', 'SKILL.md'), 'Fixture skill.\n');
   await writeFile(path.join(claudeHome, 'plans', 'fixture-plan.md'), 'Project plan.\n');
+  await writeFile(path.join(claudeHome, '.DS_Store'), 'claude finder metadata\n');
+  await writeFile(path.join(claudeHome, 'plugins', '.DS_Store'), 'plugins finder metadata\n');
+  await writeFile(path.join(claudeHome, 'plugins', 'cache', '.DS_Store'), 'cache finder metadata\n');
+  await writeFile(path.join(pluginNodeModules, '.DS_Store'), 'node modules finder metadata\n');
+  await writeFile(path.join(pluginNodeModules, 'fixture-package.json'), '{}\n');
   await writeFile(path.join(claudeProject, 'memory', 'MEMORY.md'), 'Remember the migration goal.\n');
   const claudeSession = path.join(claudeProject, `${sessionId}.jsonl`);
   const sessionRecord = {
@@ -250,6 +268,9 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   assert.ok(manifest.agentState.entries.some((entry) => entry.logicalPath.endsWith(`${sessionId}.jsonl`)));
   assert.ok(manifest.agentState.entries.some((entry) => entry.logicalPath.endsWith('memory/MEMORY.md')));
   assert.ok(manifest.agentState.entries.some((entry) => entry.logicalPath === 'agents/reviewer.md'));
+  assert.equal(manifest.entries.some((entry) => entry.logicalPath === '.DS_Store'), false);
+  assert.equal(manifest.entries.some((entry) => entry.logicalPath === '.tracked/.DS_Store'), true);
+  assert.equal(manifest.agentState.entries.some((entry) => entry.logicalPath.endsWith('.DS_Store')), false);
   assert.equal(manifest.agentState.entries.filter((entry) => entry.logicalPath === '.claude.json').length, 1);
   assert.equal(
     await readFile(path.join(captured.capsulePath, 'payload', 'claude-home', '.claude.json'), 'utf8'),
@@ -277,15 +298,83 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
 
   const inventoryText = await readFile(path.join(captured.capsulePath, 'inventory.jsonl'), 'utf8');
   assert.match(inventoryText, /credential-filename-policy/);
+  assert.match(inventoryText, /platform-metadata-policy/);
   assert.doesNotMatch(inventoryText, /fake_fixture_secret_123456789/);
+  await assert.rejects(lstat(path.join(captured.capsulePath, 'payload', 'repository', '.DS_Store')));
+  await assert.rejects(lstat(path.join(captured.capsulePath, 'payload', 'claude-home', '.DS_Store')));
+
+  const finderMetadataPaths = [
+    '.DS_Store',
+    'plugins/.DS_Store',
+    'plugins/cache/.DS_Store',
+    'plugins/cache/claude-plugins-official/chrome-devtools-mcp/1.7.0/node_modules/.DS_Store',
+  ];
+  for (const logicalPath of finderMetadataPaths) {
+    await writeFile(
+      path.join(captured.capsulePath, 'payload', 'claude-home', ...logicalPath.split('/')),
+      'post-capture finder metadata\n',
+    );
+  }
+  const finderValidation = await validateCapsule(captured.capsulePath);
+  assert.equal(finderValidation.valid, true);
+  assert.deepEqual(
+    finderValidation.warnings
+      .filter((warning) => warning.code === 'ignored-unreferenced-platform-metadata')
+      .map((warning) => warning.path),
+    finderMetadataPaths,
+  );
+
+  const legacyCapsule = path.join(root, 'legacy-platform-metadata-capsule');
+  await cp(captured.capsulePath, legacyCapsule, { recursive: true, verbatimSymlinks: true });
+  const legacyManifestPath = path.join(legacyCapsule, 'manifest.json');
+  const legacyManifest = await readJson(legacyManifestPath);
+  const legacyPayloadPath = path.join(legacyCapsule, 'payload', 'repository', '.DS_Store');
+  await writeFile(legacyPayloadPath, 'legacy captured finder metadata\n');
+  const trackedMetadataEntry = legacyManifest.entries.find(
+    (entry) => entry.logicalPath === '.tracked/.DS_Store',
+  );
+  legacyManifest.entries.push({
+    ...structuredClone(trackedMetadataEntry),
+    id: 'entry-legacy-platform-metadata',
+    logicalPath: '.DS_Store',
+    payloadPath: 'payload/repository/.DS_Store',
+    tracked: false,
+    sha256: await sha256File(legacyPayloadPath),
+  });
+  legacyManifest.git.before.status = `${legacyManifest.git.before.status}\n? .DS_Store`;
+  legacyManifest.git.after.status = `${legacyManifest.git.after.status}\n? .DS_Store`;
+  legacyManifest.manifestDigest = digestObject(legacyManifest, 'manifestDigest');
+  await writeJsonAtomic(legacyManifestPath, legacyManifest);
+  await appendFile(legacyPayloadPath, 'finder changed it after capture\n');
+
+  const legacyValidation = await validateCapsule(legacyCapsule);
+  assert.equal(legacyValidation.valid, true);
+  assert.ok(legacyValidation.warnings.some((warning) => (
+    warning.code === 'ignored-manifest-platform-metadata' &&
+    warning.path === '.DS_Store' &&
+    warning.state === 'modified'
+  )));
+  const legacyDestination = path.join(root, 'legacy-restored-project');
+  const legacyPlan = await createRestorePlan({ capsule: legacyCapsule, destination: legacyDestination });
+  assert.equal(legacyPlan.executable, true, JSON.stringify(legacyPlan.blockers));
+  assert.equal(legacyPlan.operations.some((operation) => operation.logicalPath === '.DS_Store'), false);
+  const legacyPlanPath = path.join(legacyCapsule, 'operations', 'legacy-restore-plan.json');
+  await writeJsonAtomic(legacyPlanPath, legacyPlan);
+  const legacyReceipt = await restoreFromPlan({ plan: legacyPlanPath, approve: true });
+  assert.equal(legacyReceipt.result, 'restored-and-verified');
+  await assert.rejects(lstat(path.join(legacyDestination, '.DS_Store')));
 
   const corruptedCapsule = path.join(root, 'corrupted-capsule');
   await cp(captured.capsulePath, corruptedCapsule, { recursive: true, verbatimSymlinks: true });
   const readmeEntry = manifest.entries.find((entry) => entry.logicalPath === 'README.md');
   await appendFile(path.join(corruptedCapsule, readmeEntry.payloadPath), 'corruption\n');
+  await writeFile(path.join(corruptedCapsule, 'payload', 'claude-home', 'unexpected.txt'), 'undeclared\n');
   const corruptedValidation = await validateCapsule(corruptedCapsule);
   assert.equal(corruptedValidation.valid, false);
   assert.ok(corruptedValidation.errors.some((error) => error.code === 'payload-hash-mismatch'));
+  assert.ok(corruptedValidation.errors.some((error) => (
+    error.code === 'unreferenced-payload' && error.path === 'unexpected.txt'
+  )));
 
   const destination = path.join(root, 'restored-project');
   const planPath = path.join(captured.capsulePath, 'operations', 'restore-plan.json');

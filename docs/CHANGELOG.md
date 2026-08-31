@@ -2,6 +2,20 @@
 
 All notable user-visible changes to Claude Replicant are recorded here. Versions follow semantic versioning for the plugin and CLI. Capsule schema versions are tracked independently inside generated artifacts and schema files.
 
+## 0.4.4 — 2026-09-01
+
+### Fixed
+
+- Fixed transferred capsules being rejected when macOS Finder added unreferenced `.DS_Store` files inside the payload after manifest finalization.
+- Validation now reports unreferenced regular `.DS_Store` files as `ignored-unreferenced-platform-metadata` warnings; it neither restores them nor changes the manifest.
+- Legacy capsules that included untracked `.DS_Store` files in their manifests now report those entries as `ignored-manifest-platform-metadata` and omit them from restore, even if Finder changed or removed them after capture.
+- All other unreferenced files, directories, and symlinks remain hard `unreferenced-payload` errors.
+- New captures exclude untracked `.DS_Store` files from repository and Claude-state payloads and from the expected restored Git status. Tracked `.DS_Store` files remain canonical content and retain full hash verification.
+
+### Verified
+
+- Added regression coverage for the four reported Finder paths, legacy referenced metadata modified after capture, capture-time exclusion, post-finalization validation, strict rejection of a non-metadata extra file, tracked metadata integrity, corruption detection, transfer, restore, and Git verification.
+
 ## 0.4.3 — 2026-09-01
 
 ### Documentation

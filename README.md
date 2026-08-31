@@ -4,7 +4,7 @@ Portable, integrity-checked migration capsules for Claude Code projects and othe
 
 > **Status:** Part 1 is ready. It captures, validates, and restores the repository and locally available Claude Code state, including path-remapped native session resume on another computer. Part 2—analysis and gold-standard cross-agent context—is planned for later.
 
-Current release: **v0.4.3**. See the [changelog](docs/CHANGELOG.md) for release-level changes and the [development log](docs/DEVELOPMENT_LOG.md) for implementation decisions and verification history.
+Current release: **v0.4.4**. See the [changelog](docs/CHANGELOG.md) for release-level changes and the [development log](docs/DEVELOPMENT_LOG.md) for implementation decisions and verification history.
 
 ## Overview
 
@@ -70,6 +70,8 @@ Part 1 is the tested migration foundation. It currently supports:
 - SHA-256 inventory and manifest integrity checks;
 - a self-contained, static `capture-report.html` with no scripts or remote resources;
 - detection of source changes and capsule corruption;
+- exclusion of untracked macOS `.DS_Store` metadata during capture;
+- warning-only handling of untracked `.DS_Store` metadata in legacy capsules and regular `.DS_Store` files Finder adds after finalization; these files are omitted from restore, while tracked metadata and every other undeclared payload retain strict integrity checks;
 - a versioned dry-run restore plan;
 - explicit approval before restoring to a new, nonexistent destination;
 - remapping of Claude Code’s path-derived project key to the restored repository path;
