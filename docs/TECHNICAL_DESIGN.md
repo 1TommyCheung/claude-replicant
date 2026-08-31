@@ -1,8 +1,11 @@
 # Claude Replicant: Technical Design
 
-Status: Part 1 implemented in v0.4; later analysis and cross-agent phases remain planned
+Specification version: 0.4.1
+
+Status: Part 1 implemented; Part 2 analysis and gold-standard cross-agent work remains planned
+
 Target platform: macOS  
-Preferred runtime: Bun, with a supported Node.js fallback
+Reference runtime: Node.js 22; Bun parity remains a future portability milestone
 
 ## 1. Purpose
 
@@ -72,7 +75,7 @@ Claude Replicant plugin
 
 ### 4.1 Shared core
 
-The shared core is a TypeScript library and CLI contract. Its public interfaces use portable JavaScript, Web, and Node-compatible APIs. It contains:
+The shared core is an ECMAScript module library and CLI contract. Its public interfaces use portable JavaScript and Node-compatible APIs. It contains:
 
 - **source discovery:** locates candidate project and agent artifacts through versioned adapters; discovered paths are never assumed to be stable;
 - **capture planner:** classifies candidates, applies inclusion policy, estimates sensitivity and size, and creates an approval-ready plan;
@@ -273,7 +276,7 @@ A minimized, deliberately lossy derivative intended to cross a person, team, mac
 
 An action-oriented, target-specific derivative of the canonical capsule containing a validated restore plan plus only the artifacts approved for restoration. It is a transport/execution view, not a replacement backup.
 
-The dry-run plan conforms to the versioned `restore-plan.schema.json` contract. Its schema identity/version is embedded in every plan, and readers reject unsupported major versions. Phase 0 must define version 1 before the Phase 1 thin slice begins; implementations must not substitute ad hoc console prose for the machine-readable plan.
+The dry-run plan conforms to the versioned `restore-plan.schema.json` contract. Its schema identity/version is embedded in every plan, and readers reject unsupported major versions. Version 1 is the implemented Part 1 contract; implementations must not substitute ad hoc console prose for the machine-readable plan.
 
 - Declares the expected target agent, adapter version range, project identity constraints, and preconditions.
 - Contains operations such as `copy-new`, `merge-structured`, `present-context`, or `skip`; it never relies on arbitrary embedded scripts.
@@ -387,7 +390,7 @@ Restore planning never assumes that copying `.git` blindly is portable. It choos
 
 ### 7.2 Part 1 pinned Git and metadata contracts
 
-The Node reference implementation pins the following Phase 0 decisions:
+The Node reference implementation pins the following Part 1 decisions:
 
 - **Git reconstruction:** Part 1 supports a normal, self-contained `.git/` directory. It captures Git administrative bytes—including objects, refs, HEAD, packed refs, index, and in-progress state—without interpreting them as commands, excluding volatile lock/socket entries. Restore recreates those bytes relative to the new repository root; the index is reconstructed byte-for-byte, not regenerated from the worktree, so staged state remains distinguishable from unstaged state.
 - **Path-bound Git state:** a `.git` indirection file, `commondir`, `core.worktree`, object alternates, linked worktrees, or another absolute/external administrative binding is a Part 1 capture/restore blocker. Preview reports redacted binding kinds without running Git against the bound worktree; confirmed Part 1 capture refuses before copying them. A future evidence-only mode may preserve such files, and any later dry-run/receipt must use declared variance codes such as `git-path-bound:not-applied`; it may never copy an absolute source-machine binding into an active destination repository without proven remapping.
@@ -401,25 +404,17 @@ The Node reference implementation pins the following Phase 0 decisions:
 
 ### 8.1 Policy
 
-macOS is the initial supported platform. Bun is preferred for packaging, analysis, metadata, and local storage. Runtime selection happens before each capture, analysis, derivation, validation, or restore operation so every output records a truthful execution environment.
+macOS is the initial supported platform. Part 1 has one runtime path: Node.js `>=22.0.0 <23.0.0`. The CLI checks that range before an operation and records the exact executable and runtime version in generated artifacts. An unsupported runtime stops before capture, planning, validation, or restore can claim success.
 
-1. Resolve a Bun binary from an explicit configuration or `PATH`; never trust an artifact-provided executable.
-2. Execute bounded probes with a sanitized environment and timeout: `bun --version`, `bun --revision`, architecture/platform inspection, and a versioned core compatibility smoke test.
-3. Check the reported version against the release support matrix and test the exact capabilities required by the chosen operation, including filesystem access, streams, cryptographic hashing, subprocess behavior if needed, archive implementation, and metadata backend.
-4. If all mandatory probes pass, select Bun and record the binary's resolved path, version/revision, probe profile, and results.
-5. If Bun is absent, incompatible, crashes, times out, or fails a mandatory capability probe, record the reason and probe a supported Node.js binary using the equivalent portable-core test.
-6. If Node.js passes, select Node.js and disable any optional Bun-only acceleration.
-7. If neither runtime is viable, stop before capture with a clear remediation message containing detected paths/versions, failed probes, the supported version ranges, and install/upgrade guidance. Never emit a package that implies capture succeeded.
-
-The Phase 1 Node reference/conformance range is pinned to `>=22.0.0 <23.0.0`; every result records the exact runtime version. The release support matrix is versioned with the product and tested in CI. Bun remains preferred once Phase 2 parity is established; its supported range is a later release-engineering decision, not an implicit `PATH` assumption.
+Bun is not selected by the current implementation. A future Bun adapter must be explicitly versioned and capability-probed, must not trust an artifact-provided executable, and must pass semantic parity and cross-runtime transfer tests before it can become a supported execution path.
 
 ### 8.2 Portability rules
 
-- Required core paths use APIs available under both selected runtimes, normally `node:fs`, `node:path`, `node:crypto`, standard streams, and Web APIs whose behavior is covered by conformance tests.
-- Bun-specific APIs must be isolated in a runtime adapter and have a Node implementation or be an optional optimization.
+- Required core paths use the supported Node.js APIs, normally `node:fs`, `node:path`, `node:crypto`, standard streams, and covered Web APIs.
+- Any future Bun-specific APIs must be isolated in a runtime adapter and have a Node implementation or be an optional optimization.
 - Package schemas, hashes, canonical JSON, archive ordering, summaries, and validation results must be runtime-independent.
-- Golden-package tests run capture and validation under both runtimes and compare semantic output; cross-runtime tests create with one runtime and validate/restore with the other.
-- After transfer, validation, destination readiness reassessment, and dry-run restore planning must run with a supported Node.js runtime and the portable core CLI, without Bun and without installing the Claude Replicant plugin. Actual restore support must follow the same constraint when writes are implemented.
+- Before Bun support is released, golden-package tests must run capture and validation under both runtimes and compare semantic output; cross-runtime tests must create with one runtime and validate/restore with the other.
+- After transfer, validation, destination readiness reassessment, dry-run planning, and actual restore run with the supported Node.js runtime and portable core CLI without requiring Bun or the Claude Replicant plugin.
 - Filesystem tests cover macOS case behavior, Unicode normalization, permissions, symlinks, extended attributes policy, and Apple Silicon and Intel distribution targets where supported.
 
 Bun aims for broad Node.js compatibility and runs many Node test-suite cases, but its own documentation describes compatibility as ongoing rather than complete. Compatibility therefore reduces implementation duplication; it does not replace testing. See [Bun's Node.js compatibility status](https://bun.com/docs/runtime/nodejs-compat) and [Bun runtime design goals](https://bun.com/docs/runtime).
@@ -543,44 +538,45 @@ The test captures to a separate chosen store, validates manifest closure and eve
 
 Schemas use semantic versions. Readers reject unsupported major versions, tolerate documented additive minor fields, and preserve unknown fields when transforming where possible. Adapter compatibility is separate from package-schema compatibility because agent artifact formats may change independently. Migrations are pure, versioned transformations that emit a new derived package and never mutate the only copy.
 
-## 14. Phased roadmap
+## 14. Phased roadmap and implementation state
 
-### Phase 0 — evidence, contracts, and threat model
+### Part 1A — evidence, contracts, and threat model (complete)
 
-- Maintain the synthetic Claude Code restorability fixture described in Section 11.1 across a different absolute path and isolated destination Claude home, including session catalog and native-resume layout assertions.
-- Finalize measurable comparable-context criteria, plugin/core boundaries, self-contained capsule schemas, canonical JSON, Agent Environment Profile and integration-neutral report schemas, the version 1 `restore-plan.schema.json` contract, F0 metadata envelope, live-consistency/readiness codes, Git safety rules, secret denylist, runtime support matrix, and threat model.
-- Pin and publish the exact supported Node.js version range used by the Phase 1 reference path before any conformance result is claimed reproducible; record the exact runtime version in every fixture result.
-- Build the Section 12.1 fixture and secret/corruption corpus before ingesting real sessions.
+- The capsule, restore-plan, session-catalog, integrity, readiness, Git safety, and secret-exclusion contracts are defined and implemented.
+- The supported reference runtime is Node.js `>=22.0.0 <23.0.0`; the runtime version is recorded in generated artifacts.
+- The synthetic source-to-destination fixture covers corruption, live append, credential exclusion, Git state, path remapping, multiple sessions, and native-resume layout.
 
-### Phase 1 — thin portable end-to-end slice
+### Part 1B — portable capture and restore (complete)
 
-- Implement exactly one portable reference/conformance runtime path first: supported Node.js. This sequencing proves the required no-plugin destination path; it does not change the product policy that Bun becomes preferred after parity is established.
-- Implement explicit-source repository and Claude-home capture to an explicit destination store, immutable capsule finalization, manifest/inventory/SHA-256 generation, factual JSON/Markdown/HTML reports with complete session catalogs, independent validation, corruption detection, dual-destination probing, a versioned dry-run restore plan for a different path, and—only after validation and explicit approval—an actual isolated repository/Git/Claude-state restore with path remapping, native-resume verification, and JSON/Markdown/HTML receipts.
-- Include all locally stored sessions in the selected Claude project directory, memory, and user agent configuration through the Claude Code adapter. Do not add semantic/model analysis, dependency installation, dedicated credential stores, encryption, signing, cross-agent continuity, or standalone binaries.
-- Pass the Section 12.1 source-to-destination restore fixture under Node and document every unsupported F0 metadata/Git/Claude capability as an `action-required` or `not-ready` finding. Part 1 cannot be declared complete until repository-data and declared Git-state acceptance checks pass after actual restore.
+- The Node.js CLI captures repository and Claude state into one independently movable capsule, validates hashes, plans restore, and restores only to new isolated destinations after explicit approval.
+- Capture produces JSON/Markdown/HTML reports and `sessions.json`; restore produces JSON/Markdown/HTML receipts inside the same capsule.
+- The adapter captures all locally stored sessions in the selected Claude project directory and relevant local memory, agent, plugin, plan, task, history, settings, and cache state while excluding dedicated credential stores.
+- Restore preserves canonical bytes, remaps only restored path-bound state, verifies every remapped file, and requires every cataloged session to satisfy the native-resume layout contract.
 
-### Phase 2 — Bun-first parity and portability hardening
+### Part 1C — portability hardening (ongoing)
 
-- Add runtime selection and the Bun implementation as the preferred healthy path, retaining the Node reference path; require semantic package parity and Bun-created/Node-validated transfer tests.
+- Add an optional Bun implementation only after it produces semantically identical capsules and passes Bun-created/Node-validated transfer tests; Node.js remains the reference path.
 - Harden APFS/non-APFS capability probing, metadata envelopes, live-write detection, inert Git observation, crash-safe staging, capsule-folder scanning, and the portable Node transfer CLI.
 - Harden the already-isolated Part 1 restore path across supported Mac/filesystem combinations; keep in-place overwrite and dependency installation disabled.
 
-### Phase 3 — plugin surface and scoped adapters
+### Part 1D — plugin distribution (complete)
 
-- Scaffold the Claude Replicant plugin and expose non-disruptive capture/open/list/inspect/validate/restore-plan commands over the proven core.
-- Add a Claude Code discovery adapter only for artifact classes established by the Phase 0 evidence table, enforcing project-scoped defaults and per-artifact global opt-in; map safe skill/MCP/API facts into the neutral profile.
-- Add Codex integration only after the plugin/core boundary and portable Node workflow pass conformance, using the same profile/report schema without consuming Claude-specific configuration.
+- The same repository is distributed as a Codex and Claude Code marketplace plugin while retaining the standalone CLI.
+- The capture skill treats the confirmed invocation as authorization for the declared repository and Claude-state roots and does not add per-artifact privacy prompts.
+- Plugin installation does not capture, inspect, or inject capsule content automatically; capture, validation, planning, and restore remain explicit operations.
 
-### Phase 4 — derivatives, analysis, and advanced restore
+### Part 2 — analysis and gold-standard capsules (planned)
 
 - Implement repeatable semantic analysis derivatives, session/model-identifier inspection, repository observations, F2 project-context packages, and F3 shareable packages.
-- Extend the Part 1 isolated restore with advanced conflict handling, rollback, and separately approved in-place promotion only after stronger safety gates pass.
-- Implement native Claude Code state writes only for explicitly proven artifact/version/path cases; otherwise deliver the comparable-context handoff.
+- Establish reviewed Claude Code capsules as provenance-backed gold-standard context for evaluating, grounding, or training other agents.
+- Add cross-agent continuity through normalized evidence without treating one agent's hidden state as portable to another.
+- Keep every derivative within its owning capsule and preserve the canonical Part 1 payload unchanged.
 
-### Phase 5 — protected distribution and extended capabilities
+### Later extensions — protected distribution and advanced restore
 
 - Design and implement authenticated encryption and key management before allowing credential capture; later add package signing, notarization, SBOMs, update verification, and retention tooling.
-- Produce tested macOS Bun standalone binaries only after portable Bun/Node parity; retain the plugin-free Node distribution.
+- Consider advanced conflict handling, rollback, and separately approved in-place promotion only after stronger safety gates pass.
+- Produce tested macOS Bun standalone binaries only after portable Bun/Node parity; retain the plugin-free Node.js distribution.
 - Consider remote storage, team policy services, and additional adapters only after local capture/validation/restore contracts are stable.
 
 ## 15. Open design decisions
@@ -602,3 +598,9 @@ These decisions do not alter the core invariants: one standalone, portable packa
 - [Runtime overview and compatibility goals](https://bun.com/docs/runtime)
 - [Node.js compatibility status](https://bun.com/docs/runtime/nodejs-compat)
 - [Standalone executable and cross-compilation guidance](https://bun.com/docs/bundler/executables)
+
+## 17. Specification maintenance
+
+This document defines the current behavioral contract. User-visible release changes are recorded in `docs/CHANGELOG.md`; implementation milestones, evidence, and design decisions are recorded in `docs/DEVELOPMENT_LOG.md`.
+
+Every implementation change that alters capsule layout, capture scope, restoration behavior, session compatibility, safety boundaries, or acceptance criteria must update this specification in the same commit. Schema-breaking changes require a new schema major version. Additive compatible changes require a documented schema minor version or an explicitly optional field. Documentation-only corrections may use a plugin patch release without changing capsule schema versions.

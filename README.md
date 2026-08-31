@@ -4,6 +4,8 @@ Portable, integrity-checked migration capsules for Claude Code projects and othe
 
 > **Status:** Part 1 is ready. It captures, validates, and restores the repository and locally available Claude Code state, including path-remapped native session resume on another computer. Part 2—analysis and gold-standard cross-agent context—is planned for later.
 
+Current release: **v0.4.1**. See the [changelog](docs/CHANGELOG.md) for release-level changes and the [development log](docs/DEVELOPMENT_LOG.md) for implementation decisions and verification history.
+
 ## Overview
 
 Claude Replicant captures a selected Git repository and its locally available Claude Code state into a self-describing capsule with an immutable, hash-verified canonical payload. This includes project sessions, memory, subagents, file history, plans, tasks, skills, commands, plugins, hooks, settings, and the repository working tree/Git state. Operational plans, receipts, and future derivatives may be added only inside their dedicated capsule subfolders.
@@ -238,4 +240,6 @@ The synthetic test fixture covers repository and Claude-state capture, sessions,
 
 ## Design documentation
 
-See [`docs/TECHNICAL_DESIGN.md`](docs/TECHNICAL_DESIGN.md) for the detailed architecture, threat model, package contracts, safety rules, and phased design.
+- [Technical specification](docs/TECHNICAL_DESIGN.md) — architecture, capsule contracts, restoration rules, safety model, acceptance criteria, and roadmap.
+- [Changelog](docs/CHANGELOG.md) — user-visible changes by released version.
+- [Development log](docs/DEVELOPMENT_LOG.md) — implementation milestones, design decisions, tests, and known boundaries.
