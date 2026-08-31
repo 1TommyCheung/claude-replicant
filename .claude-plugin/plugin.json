@@ -1,0 +1,11 @@
+{
+  "name": "claude-replicant",
+  "version": "0.1.2",
+  "description": "Capture, validate, plan, and safely restore repository migration capsules.",
+  "author": {
+    "name": "1TommyCheung",
+    "url": "https://github.com/1TommyCheung"
+  },
+  "homepage": "https://github.com/1TommyCheung/claude-replicant",
+  "repository": "https://github.com/1TommyCheung/claude-replicant"
+}

@@ -1,0 +1,16 @@
+{
+  "name": "claude-replicant",
+  "owner": {
+    "name": "1TommyCheung",
+    "url": "https://github.com/1TommyCheung"
+  },
+  "description": "Portable, integrity-checked migration capsules for coding-agent projects.",
+  "plugins": [
+    {
+      "name": "claude-replicant",
+      "source": "./",
+      "description": "Create integrity-checked, portable repository migration capsules.",
+      "version": "0.1.2"
+    }
+  ]
+}
