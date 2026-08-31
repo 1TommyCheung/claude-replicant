@@ -12,6 +12,8 @@ Requirements:
 
 Run `node src/cli.mjs help` for the command workflow. Capture defaults to preview mode and requires `--confirm`. Restore requires a validated plan, a nonexistent destination, and `--approve`.
 
+Each capture is finalized as `<chosen-store>/capsule/<capsule-id>/`. That capsule directory is self-contained, so it can be zipped and moved on its own or archived together with other capsule directories.
+
 Run the test suite with `npm test` or the repeatable smoke test with `npm run smoke`.
 
 ## Install as a Codex plugin

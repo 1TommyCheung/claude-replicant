@@ -149,6 +149,13 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   await waitForExit(writer);
   assert.equal(captured.mode, 'captured');
   assert.equal(captured.validation.valid, true);
+  assert.equal(captured.capsulePath, path.join(store, 'capsule', captured.packageId));
+  await assert.rejects(lstat(path.join(store, 'capsules')));
+  const catalogEntries = (await readFile(path.join(store, 'catalog.jsonl'), 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  assert.equal(catalogEntries.at(-1).relativePath, `capsule/${captured.packageId}`);
   await assert.rejects(lstat(executionMarker));
 
   const validation = await validateCapsule(captured.capsulePath);

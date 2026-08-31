@@ -58,6 +58,8 @@ const REPORT_FILES = [
   'restore-readiness.json',
 ];
 
+const CAPSULE_FOLDER = 'capsule';
+
 function defaultAgentEnvironmentProfile() {
   return {
     schemaVersion: '1.0.0',
@@ -217,7 +219,7 @@ async function initializeStore(store) {
       createdAt: isoNow(),
     });
   }
-  await mkdir(path.join(store, 'capsules'), { recursive: true, mode: 0o700 });
+  await mkdir(path.join(store, CAPSULE_FOLDER), { recursive: true, mode: 0o700 });
   await mkdir(path.join(store, 'derivatives'), { recursive: true, mode: 0o700 });
   await mkdir(path.join(store, 'receipts'), { recursive: true, mode: 0o700 });
 }
@@ -231,7 +233,7 @@ async function appendCatalog(store, manifest) {
     sourceLabel: manifest.source.label,
     manifestDigest: manifest.manifestDigest,
     readiness: manifest.readiness.overall,
-    relativePath: `capsules/${manifest.packageId}`,
+    relativePath: `${CAPSULE_FOLDER}/${manifest.packageId}`,
   })}\n`;
   await writeTextAtomic(catalog, next);
 }
@@ -320,8 +322,8 @@ export async function captureRepository({
     throw new Error(`Destination store cannot represent source filenames: ${JSON.stringify(storeCollisions)}`);
   }
   const packageId = newId('capsule');
-  const staging = path.join(store, 'capsules', `.staging-${packageId}`);
-  const finalPath = path.join(store, 'capsules', packageId);
+  const staging = path.join(store, CAPSULE_FOLDER, `.staging-${packageId}`);
+  const finalPath = path.join(store, CAPSULE_FOLDER, packageId);
   const payloadRoot = path.join(staging, 'payload', 'repository');
   const startedAt = isoNow();
   await mkdir(payloadRoot, { recursive: true, mode: 0o700 });

@@ -21,7 +21,7 @@ Use the deterministic CLI at `scripts/claude-replicant.mjs` in this plugin root.
 2. Run `node <plugin-root>/scripts/claude-replicant.mjs capture --source <source> --store <store>` without `--confirm`. This is a read-only preview.
 3. Present the resolved paths, candidate count, Git/layout findings, exclusions policy, and secret-bearing warning.
 4. Only after explicit approval, repeat the command with `--confirm`.
-5. Report the capsule path, manifest digest, validation result, domain readiness, and limitations. A non-ready Git domain is not a successful restorable Part 1 capture.
+5. Report the self-contained capsule path as `<store>/capsule/<capsule-id>/`, plus its manifest digest, validation result, domain readiness, and limitations. A non-ready Git domain is not a successful restorable Part 1 capture.
 
 ## Validate and plan
 

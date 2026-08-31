@@ -126,7 +126,7 @@ chosen-store/
   catalog.jsonl
   tools/
     node/                  # versioned portable validator/restore planner
-  capsules/
+  capsule/
     <capsule-id>/
       manifest.json
       inventory.jsonl
@@ -153,7 +153,7 @@ chosen-store/
 
 `store.json` identifies the store format and optional user label. `catalog.jsonl` is a convenience index of capsule IDs, project labels, capture times, types, fidelity/readiness, and relative paths. The catalog is transactional and fully rebuildable by scanning capsule manifests; it is never the authority for capsule contents. Catalog entries and manifests use store-relative logical paths, not source-machine absolute paths.
 
-Each directory under `capsules/` is a self-describing, immutable canonical capsule. It contains all data and metadata needed for independent integrity validation, analysis, and restore planning. Finalization uses a private staging directory followed by an atomic rename; after finalization, any change creates a new capsule or derivative with its own ID. Capsules do not require the store catalog to validate or restore. A store export includes or is accompanied by the versioned portable Node CLI and schemas needed for validation and dry-run restore planning; tool checksums/version are outside capsule content and cannot change its manifest.
+Each directory under `capsule/` is a self-describing, immutable canonical capsule. Every `<capsule-id>/` directory is independently movable and zip-ready; multiple capsule directories can also be archived together. It contains all data and metadata needed for independent integrity validation, analysis, and restore planning. Finalization uses a private staging directory followed by an atomic rename; after finalization, any change creates a new capsule or derivative with its own ID. Capsules do not require the store catalog to validate or restore. A store export includes or is accompanied by the versioned portable Node CLI and schemas needed for validation and dry-run restore planning; tool checksums/version are outside capsule content and cannot change its manifest.
 
 The entire chosen store folder can be copied with Finder, an external disk, or another user-authorized transfer mechanism to a different Mac. Opening it there validates `store.json`, scans capsule manifests, reports missing/corrupt entries, and rebuilds the catalog if necessary. Transfer itself is outside the plugin's authority unless the user explicitly requests a supported transfer action.
 
@@ -318,7 +318,7 @@ Readiness is also domain-scoped. `repositoryData`, `gitState`, `filesystemMetada
 7. **Collect:** copy into a private staging directory under the chosen store without executing repository or artifact content. Preserve originals and record read-time races or mutations.
 8. **Preserve:** write the canonical capsule. Redaction/minimization applies to derivatives or to items explicitly excluded by the canonical capture policy; every exception becomes a readiness finding. Transform a copy, never the source.
 9. **Package:** canonicalize the manifest, hash final stored bytes, and write the inventory, factual JSON/Markdown capture reports, Agent Environment Profile envelope, restore-readiness assessment, redaction report, and validation inputs. No session summarization, repository interpretation, or model call is required; unsafe profile extraction is recorded as deferred.
-10. **Validate/finalize:** independently reopen the staged capsule, validate schema, inventory closure, hashes, path safety, provenance, and policy assertions, then atomically move it to `capsules/<capsule-id>/` and transactionally append the catalog entry.
+10. **Validate/finalize:** independently reopen the staged capsule, validate schema, inventory closure, hashes, path safety, provenance, and policy assertions, then atomically move it to `capsule/<capsule-id>/` and transactionally append the catalog entry.
 11. **Return:** report the capsule ID, chosen store path, validation/readiness status, and known gaps. Offer analysis or derivation as follow-on actions rather than extending the capture operation.
 
 If source bytes change while being read, capture retries once and otherwise records both the inconsistency and a partial result. A package may not claim `complete` when requested evidence was inaccessible or unstable.
