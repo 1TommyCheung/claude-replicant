@@ -2,6 +2,14 @@
 
 All notable user-visible changes to Claude Replicant are recorded here. Versions follow semantic versioning for the plugin and CLI. Capsule schema versions are tracked independently inside generated artifacts and schema files.
 
+## 0.4.3 — 2026-09-01
+
+### Documentation
+
+- Added copy-paste prompts that direct Codex or Claude Code to install or update Claude Replicant from its public GitHub marketplace.
+- Added complete backup, post-transfer validation, and cross-computer restore examples with agent prompts and equivalent standalone CLI commands.
+- Documented the required preview/approval boundaries, capsule transfer unit, isolated Claude home, session picker, direct session resume, and destination reauthentication caveat.
+
 ## 0.4.2 — 2026-09-01
 
 ### Fixed

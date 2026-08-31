@@ -1,6 +1,6 @@
 # Claude Replicant: Technical Design
 
-Specification version: 0.4.2
+Specification version: 0.4.3
 
 Status: Part 1 implemented; Part 2 analysis and gold-standard cross-agent work remains planned
 

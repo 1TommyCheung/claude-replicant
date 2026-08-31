@@ -2,6 +2,13 @@
 
 This log records how Claude Replicant evolved, why major design choices were made, and what evidence supports the current implementation. The changelog is the concise user-facing release record; this document is the engineering narrative.
 
+## 2026-09-01 — v0.4.3 operational examples
+
+- Added agent-ready installation prompts for Codex and Claude Code.
+- Added end-to-end README examples for previewed backup, explicit capture approval, validation after transfer, dry-run restore planning, explicit restore approval, isolated restoration, and native session resume.
+- Kept shell commands beside the natural-language prompts so users can audit or run the same operations manually.
+- Linked the Codex instructions to the official OpenAI plugin marketplace workflow and the Claude instructions to Claude Code's marketplace, user-scope installation, and reload behavior.
+
 ## 2026-09-01 — v0.4.2 `.claude.json` collision fix
 
 ### Failure
