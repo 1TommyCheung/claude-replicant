@@ -1,9 +1,9 @@
 {
   "name": "claude-replicant",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Safe repository-data migration capsules for Claude Code projects",
+  "description": "Restorable repository and Claude Code state migration capsules",
   "bin": {
     "claude-replicant": "./src/cli.mjs"
   },

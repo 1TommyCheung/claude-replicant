@@ -34,6 +34,7 @@ const SECRET_BASENAMES = new Set([
   '.env',
   '.env.local',
   '.env.production',
+  '.credentials.json',
   '.npmrc',
   '.pypirc',
   'credentials',
@@ -145,7 +146,7 @@ export async function probeFilesystem(targetDirectory) {
   };
 }
 
-export async function walkTree(root) {
+export async function walkTree(root, { include, descend } = {}) {
   const entries = [];
   async function visit(directory, prefix = '') {
     const handle = await opendir(directory);
@@ -155,8 +156,11 @@ export async function walkTree(root) {
     for (const dirent of children) {
       const logicalPath = prefix ? `${prefix}/${dirent.name}` : dirent.name;
       const absolutePath = path.join(directory, dirent.name);
-      entries.push({ logicalPath: toPosix(logicalPath), absolutePath });
-      if (dirent.isDirectory()) await visit(absolutePath, logicalPath);
+      const candidate = { logicalPath: toPosix(logicalPath), absolutePath };
+      if (!include || include(candidate, dirent)) entries.push(candidate);
+      if (dirent.isDirectory() && (!descend || descend(candidate, dirent))) {
+        await visit(absolutePath, logicalPath);
+      }
     }
   }
   await visit(root);
@@ -167,12 +171,18 @@ export async function captureTree({
   source,
   payloadRoot,
   trackedPaths,
+  candidates,
+  logicalPrefix = '',
+  payloadPrefix = 'payload/repository',
+  inventoryReason = 'selected-project-scope',
+  scanSecrets = true,
+  appendOnlyJsonl = false,
   maxEntries = 100_000,
   maxBytes = 5 * 1024 * 1024 * 1024,
 }) {
-  const candidates = await walkTree(source);
-  if (candidates.length > maxEntries) {
-    throw new Error(`Capture exceeds entry limit (${candidates.length} > ${maxEntries}).`);
+  const selectedCandidates = candidates ?? await walkTree(source);
+  if (selectedCandidates.length > maxEntries) {
+    throw new Error(`Capture exceeds entry limit (${selectedCandidates.length} > ${maxEntries}).`);
   }
 
   const tracked = new Set(trackedPaths);
@@ -184,8 +194,12 @@ export async function captureTree({
   let secretExclusions = 0;
   let unstableEntries = 0;
 
-  for (const candidate of candidates) {
-    const { logicalPath, absolutePath } = candidate;
+  for (const candidate of selectedCandidates) {
+    const relativeLogicalPath = candidate.logicalPath;
+    const logicalPath = logicalPrefix
+      ? `${logicalPrefix}/${relativeLogicalPath}`
+      : relativeLogicalPath;
+    const { absolutePath } = candidate;
     const before = await fingerprint(absolutePath);
     const stats = await lstat(absolutePath, { bigint: true });
     const metadata = entryMetadata(stats);
@@ -207,8 +221,10 @@ export async function captureTree({
     }
 
     if (stats.isFile()) {
-      const pathSecret = secretPathReason(logicalPath);
-      const contentSecret = pathSecret ? null : await secretContentReason(absolutePath, Number(stats.size));
+      const pathSecret = scanSecrets ? secretPathReason(logicalPath) : null;
+      const contentSecret = scanSecrets && !pathSecret
+        ? await secretContentReason(absolutePath, Number(stats.size))
+        : null;
       const secretReason = pathSecret ?? contentSecret;
       if (secretReason) {
         if (tracked.has(logicalPath) || logicalPath.startsWith('.git/')) {
@@ -235,8 +251,10 @@ export async function captureTree({
 
       totalBytes += Number(stats.size);
       if (totalBytes > maxBytes) throw new Error(`Capture exceeds byte limit (${maxBytes}).`);
-      const destination = path.join(payloadRoot, ...logicalPath.split('/'));
-      const appendOnlyCandidate = logicalPath.startsWith('.claude/') && logicalPath.endsWith('.jsonl');
+      const destination = path.join(payloadRoot, ...relativeLogicalPath.split('/'));
+      const appendOnlyCandidate = logicalPath.endsWith('.jsonl') && (
+        appendOnlyJsonl || logicalPath.startsWith('.claude/')
+      );
       const capturedLength = Number(stats.size);
       const digest = appendOnlyCandidate
         ? await copyFilePrefixAndHash(absolutePath, destination, capturedLength)
@@ -276,29 +294,29 @@ export async function captureTree({
         ...baseRecord,
         kind: 'file',
         sha256: digest,
-        payloadPath: `payload/repository/${logicalPath}`,
+        payloadPath: `${payloadPrefix}/${logicalPath}`,
         hardlinkGroup,
         capturedLength,
         liveAppend,
         stable,
       };
       entries.push(record);
-      inventory.push({ ...record, decision: 'included', reason: 'selected-project-scope' });
+      inventory.push({ ...record, decision: 'included', reason: inventoryReason });
       continue;
     }
 
     if (stats.isDirectory()) {
-      const destination = path.join(payloadRoot, ...logicalPath.split('/'));
+      const destination = path.join(payloadRoot, ...relativeLogicalPath.split('/'));
       await mkdir(destination, { recursive: true, mode: 0o700 });
       const record = {
         ...baseRecord,
         kind: 'directory',
         sha256: null,
-        payloadPath: `payload/repository/${logicalPath}`,
+        payloadPath: `${payloadPrefix}/${logicalPath}`,
         stable: true,
       };
       entries.push(record);
-      inventory.push({ ...record, decision: 'included', reason: 'selected-project-scope' });
+      inventory.push({ ...record, decision: 'included', reason: inventoryReason });
       continue;
     }
 
@@ -320,7 +338,7 @@ export async function captureTree({
         });
         continue;
       }
-      const destination = path.join(payloadRoot, ...logicalPath.split('/'));
+      const destination = path.join(payloadRoot, ...relativeLogicalPath.split('/'));
       await mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
       await symlink(target, destination);
       const targetClass = path.isAbsolute(target)
@@ -335,13 +353,13 @@ export async function captureTree({
         ...baseRecord,
         kind: 'symlink',
         sha256: null,
-        payloadPath: `payload/repository/${logicalPath}`,
+        payloadPath: `${payloadPrefix}/${logicalPath}`,
         linkTarget: target,
         targetClass,
         stable: true,
       };
       entries.push(record);
-      inventory.push({ ...record, decision: 'included', reason: 'selected-project-scope' });
+      inventory.push({ ...record, decision: 'included', reason: inventoryReason });
       continue;
     }
 

@@ -16,6 +16,11 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  captureClaudeState,
+  previewClaudeState,
+  restoredClaudeLogicalPath,
+} from './claude-state.mjs';
+import {
   applyFileMetadata,
   captureTree,
   probeFilesystem,
@@ -53,6 +58,7 @@ const REPORT_FILES = [
   'inventory.jsonl',
   'capture-report.json',
   'capture-report.md',
+  'capture-report.html',
   'agent-environment-profile.json',
   'redaction-report.json',
   'restore-readiness.json',
@@ -60,23 +66,24 @@ const REPORT_FILES = [
 
 const CAPSULE_FOLDER = 'capsule';
 
-function defaultAgentEnvironmentProfile() {
+function agentEnvironmentProfile(agentCapture) {
   return {
     schemaVersion: '1.0.0',
-    collectionStatus: 'deferred',
-    collectionPolicy: 'project-scoped-only',
-    projectScoped: [],
-    userGlobal: [],
-    findings: [
-      {
-        code: 'agent-environment-analysis-deferred',
-        message: 'Part 1 does not inspect Claude/Codex skills, MCP configuration, or agent state.',
-      },
-    ],
+    collectionStatus: 'complete',
+    collectionPolicy: 'selected-project-plus-user-agent-environment',
+    sourceAdapter: agentCapture.source.adapter,
+    sourceRootAlias: agentCapture.source.rootAlias,
+    projectKey: agentCapture.source.projectKey,
+    sessionIds: agentCapture.source.sessionIds,
+    capturedEntries: agentCapture.totals.entries,
+    capturedBytes: agentCapture.totals.bytes,
+    projectScoped: ['projects', 'file-history', 'session-env', 'tasks', 'todos'],
+    userGlobal: ['agents', 'commands', 'hooks', 'memory', 'output-styles', 'plans', 'plugins', 'skills'],
+    findings: agentCapture.findings,
   };
 }
 
-function readinessFrom({ capture, gitLayout, gitStable, filesystemProbe }) {
+function readinessFrom({ capture, agentCapture, gitLayout, gitStable, filesystemProbe }) {
   const repoFindings = capture.findings.filter((finding) =>
     ['source-changed-during-capture', 'special-file-not-captured'].includes(finding.code));
   const gitFindings = [
@@ -115,12 +122,12 @@ function readinessFrom({ capture, gitLayout, gitStable, filesystemProbe }) {
     },
     filesystemMetadata: { status: 'action-required', findings: metadataFindings },
     agentState: {
-      status: 'action-required',
-      findings: [{ code: 'agent-state-not-implemented', severity: 'action-required' }],
+      status: agentCapture.totals.unstableEntries === 0 ? 'ready' : 'not-ready',
+      findings: agentCapture.findings,
     },
     agentEnvironment: {
-      status: 'action-required',
-      findings: [{ code: 'agent-environment-deferred', severity: 'action-required' }],
+      status: 'ready',
+      findings: [],
     },
     credentials: {
       status: 'action-required',
@@ -145,7 +152,8 @@ function readinessFrom({ capture, gitLayout, gitStable, filesystemProbe }) {
     domains,
     warnings: [
       'SECRET-BEARING: store and transfer this capsule as confidential data.',
-      'Credential and agent-state capture are intentionally outside Part 1.',
+      'Claude Code session transcripts and agent state are captured without content redaction.',
+      'Dedicated credential stores are excluded; session text may still contain sensitive values.',
     ],
   };
 }
@@ -180,14 +188,38 @@ function captureMarkdown(report) {
     `- Captured: ${report.createdAt}`,
     `- Included entries: ${report.totals.entries}`,
     `- Included bytes: ${report.totals.bytes}`,
+    `- Claude state entries: ${report.agentState.entries}`,
+    `- Claude sessions: ${report.agentState.sessions}`,
     `- Credential exclusions: ${report.totals.secretExclusions}`,
     `- Overall readiness: ${report.readiness}`,
     '',
     '> SECRET-BEARING: Treat this capsule and its store as confidential.',
     '',
-    'Claude/Codex agent state, user-global configuration, credentials, and semantic analysis are not included in Part 1.',
+    'Claude Code sessions, memory, subagents, plans, skills, commands, plugins, and related restorable state are included.',
     '',
   ].join('\n');
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function captureHtml(report) {
+  const warnings = report.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join('');
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Claude Replicant Capture Report</title><style>
+body{font:16px/1.5 system-ui,sans-serif;max-width:860px;margin:3rem auto;padding:0 1.25rem;color:#17202a}h1{margin-bottom:.25rem}.card{border:1px solid #d9dee5;border-radius:12px;padding:1rem 1.25rem;margin:1rem 0}dt{font-weight:700}dd{margin:0 0 .6rem}code{overflow-wrap:anywhere}.warning{background:#fff8df;border-color:#e8c55d}
+</style></head><body><h1>Claude Replicant Capture Report</h1><p>Self-contained migration capsule</p>
+<section class="card"><dl><dt>Capsule</dt><dd><code>${escapeHtml(report.packageId)}</code></dd><dt>Project</dt><dd>${escapeHtml(report.sourceLabel)}</dd><dt>Captured</dt><dd>${escapeHtml(report.createdAt)}</dd><dt>Readiness</dt><dd>${escapeHtml(report.readiness)}</dd></dl></section>
+<section class="card"><h2>Contents</h2><ul><li>${report.repository.entries} repository entries (${report.repository.bytes} bytes)</li><li>${report.agentState.entries} Claude state entries (${report.agentState.bytes} bytes)</li><li>${report.agentState.sessions} Claude sessions</li></ul></section>
+<section class="card warning"><h2>Handling</h2><ul>${warnings}</ul></section>
+<p>This static report contains no scripts or remote resources. See <code>manifest.json</code> and <code>inventory.jsonl</code> for authoritative evidence.</p></body></html>\n`;
 }
 
 function filterStatusForPolicyExclusions(snapshot, excludedPaths) {
@@ -254,19 +286,31 @@ async function resolveSourceAndStore(sourceInput, storeInput, { createStore = fa
   return { source, store };
 }
 
-export async function previewCapture({ source: sourceInput, store: storeInput, gitPath = 'git' }) {
+export async function previewCapture({
+  source: sourceInput,
+  store: storeInput,
+  claudeHome,
+  gitPath = 'git',
+}) {
   assertNodeVersion();
   if (!sourceInput || !storeInput) throw new Error('Capture requires explicit --source and --store paths.');
   const { source, store } = await resolveSourceAndStore(sourceInput, storeInput);
   const git = await probeGit(gitPath);
   const gitLayout = await inspectGitLayout(source);
   const candidates = await walkTree(source);
+  const claude = await previewClaudeState({ source, claudeHome });
   if (!gitLayout.actualRestoreSupported) {
     return {
       mode: 'preview',
       source,
       store,
       candidateEntries: candidates.length,
+      claudeState: {
+        rootAlias: '$CLAUDE_CONFIG_DIR',
+        projectKey: claude.projectKey,
+        sessionCount: claude.sessionIds.length,
+        candidateEntries: claude.candidates.length + claude.adjacentCandidates.length,
+      },
       git: { ...git, layout: gitLayout.layout, pathBound: gitLayout.pathBound },
       blockers: [{ code: 'git-layout-unsupported-for-part1', findings: gitLayout.pathBound }],
       warnings: ['No files were written. Part 1 capture cannot proceed for this Git layout.'],
@@ -278,6 +322,13 @@ export async function previewCapture({ source: sourceInput, store: storeInput, g
     source,
     store,
     candidateEntries: candidates.length,
+    claudeState: {
+      rootAlias: '$CLAUDE_CONFIG_DIR',
+      projectKey: claude.projectKey,
+      discoveryMethod: claude.discoveryMethod,
+      sessionCount: claude.sessionIds.length,
+      candidateEntries: claude.candidates.length + claude.adjacentCandidates.length,
+    },
     git: {
       ...git,
       layout: gitLayout.layout,
@@ -288,7 +339,7 @@ export async function previewCapture({ source: sourceInput, store: storeInput, g
     warnings: [
       'No files were written. Re-run with --confirm to create a capsule.',
       'Known credential files are excluded; tracked credential material blocks capture.',
-      'Part 1 captures selected repository data only, not Claude/Codex agent state.',
+      'Claude Code sessions and agent state will be captured as confidential, restorable data.',
     ],
   };
 }
@@ -296,15 +347,20 @@ export async function previewCapture({ source: sourceInput, store: storeInput, g
 export async function captureRepository({
   source: sourceInput,
   store: storeInput,
+  claudeHome,
   gitPath = 'git',
   confirm = false,
   maxEntries,
   maxBytes,
   beforeTreeCapture,
 }) {
-  if (!confirm) return previewCapture({ source: sourceInput, store: storeInput, gitPath });
+  if (!confirm) return previewCapture({ source: sourceInput, store: storeInput, claudeHome, gitPath });
   assertNodeVersion();
   const { source, store } = await resolveSourceAndStore(sourceInput, storeInput, { createStore: true });
+  const claudePreview = await previewClaudeState({ source, claudeHome });
+  if (pathsOverlap(claudePreview.claudeHome, store)) {
+    throw new Error('Claude home and capsule store must not overlap.');
+  }
   await initializeStore(store);
   const storeProbe = await probeFilesystem(store);
   if (!storeProbe.capabilities.atomicRename) {
@@ -325,8 +381,10 @@ export async function captureRepository({
   const staging = path.join(store, CAPSULE_FOLDER, `.staging-${packageId}`);
   const finalPath = path.join(store, CAPSULE_FOLDER, packageId);
   const payloadRoot = path.join(staging, 'payload', 'repository');
+  const agentPayloadRoot = path.join(staging, 'payload', 'claude-home');
   const startedAt = isoNow();
   await mkdir(payloadRoot, { recursive: true, mode: 0o700 });
+  await mkdir(agentPayloadRoot, { recursive: true, mode: 0o700 });
 
   try {
     if (beforeTreeCapture) await beforeTreeCapture({ source, store, packageId });
@@ -337,8 +395,20 @@ export async function captureRepository({
       maxEntries,
       maxBytes,
     });
+    const entryLimit = maxEntries ?? 100_000;
+    const byteLimit = maxBytes ?? 5 * 1024 * 1024 * 1024;
+    const agentCaptured = await captureClaudeState({
+      source,
+      claudeHome: claudePreview.claudeHome,
+      payloadRoot: agentPayloadRoot,
+      maxEntries: entryLimit - captured.totals.entries,
+      maxBytes: byteLimit - captured.totals.bytes,
+    });
     if (captured.totals.unstableEntries > 0) {
       throw new Error('Source changed during capture; quiesce the repository and retry.');
+    }
+    if (agentCaptured.totals.unstableEntries > 0) {
+      throw new Error('Claude Code state changed incompatibly during capture; quiesce Claude Code and retry.');
     }
     const gitAfter = await captureGitSnapshot(source, git);
     const gitStable = gitBefore.snapshotDigest === gitAfter.snapshotDigest;
@@ -347,23 +417,42 @@ export async function captureRepository({
       .map((record) => record.logicalPath);
     const expectedGitBefore = filterStatusForPolicyExclusions(comparableGitSnapshot(gitBefore), excludedPaths);
     const expectedGitAfter = filterStatusForPolicyExclusions(comparableGitSnapshot(gitAfter), excludedPaths);
-    const readiness = readinessFrom({ capture: captured, gitLayout, gitStable, filesystemProbe: storeProbe });
-    const agentEnvironment = defaultAgentEnvironmentProfile();
+    const readiness = readinessFrom({
+      capture: captured,
+      agentCapture: agentCaptured,
+      gitLayout,
+      gitStable,
+      filesystemProbe: storeProbe,
+    });
+    const agentEnvironment = agentEnvironmentProfile(agentCaptured);
+    const combinedTotals = {
+      entries: captured.totals.entries + agentCaptured.totals.entries,
+      bytes: captured.totals.bytes + agentCaptured.totals.bytes,
+      secretExclusions: captured.totals.secretExclusions + agentCaptured.totals.secretExclusions,
+      unstableEntries: captured.totals.unstableEntries + agentCaptured.totals.unstableEntries,
+    };
     const report = {
       schemaVersion: FORMAT_VERSION,
       packageId,
       createdAt: isoNow(),
       captureWindow: { startedAt, endedAt: isoNow() },
       sourceLabel: path.basename(source),
-      totals: captured.totals,
+      totals: combinedTotals,
+      repository: captured.totals,
+      agentState: {
+        ...agentCaptured.totals,
+        sessions: agentCaptured.source.sessionIds.length,
+      },
       readiness: readiness.overall,
       agentEnvironmentStatus: agentEnvironment.collectionStatus,
       warnings: readiness.warnings,
     };
     const redaction = {
       schemaVersion: FORMAT_VERSION,
-      credentialFilesExcluded: captured.totals.secretExclusions,
-      valuesPersisted: false,
+      credentialFilesExcluded: combinedTotals.secretExclusions,
+      contentRedactionApplied: false,
+      rawSessionContentPersisted: true,
+      dedicatedCredentialStoresExcluded: true,
       findings: captured.findings.filter((finding) => finding.code === 'credential-excluded'),
     };
 
@@ -371,8 +460,13 @@ export async function captureRepository({
       path.join(staging, 'inventory.jsonl'),
       `${captured.inventory.map((record) => JSON.stringify(record)).join('\n')}\n`,
     );
+    await appendFile(
+      path.join(staging, 'inventory.jsonl'),
+      `${agentCaptured.inventory.map((record) => JSON.stringify({ ...record, rootAlias: '$CLAUDE_CONFIG_DIR' })).join('\n')}\n`,
+    );
     await writeJson(path.join(staging, 'capture-report.json'), report);
     await writeTextAtomic(path.join(staging, 'capture-report.md'), captureMarkdown(report));
+    await writeTextAtomic(path.join(staging, 'capture-report.html'), captureHtml(report));
     await writeJson(path.join(staging, 'agent-environment-profile.json'), agentEnvironment);
     await writeJson(path.join(staging, 'redaction-report.json'), redaction);
     await writeJson(path.join(staging, 'restore-readiness.json'), readiness);
@@ -400,9 +494,9 @@ export async function captureRepository({
       },
       filesystem: { sourcePlatform: process.platform, storeProbe },
       policy: {
-        scope: 'selected-repository-only',
+        scope: 'repository-plus-restorable-claude-code-state',
         credentials: 'excluded-no-encryption-envelope',
-        agentState: 'not-captured',
+        agentState: 'captured-with-execution-as-authorization',
         repositoryCodeExecution: 'forbidden',
         limits: {
           maxEntries: maxEntries ?? 100_000,
@@ -418,7 +512,12 @@ export async function captureRepository({
         reconstruction: 'byte-for-byte-dot-git-and-index',
       },
       entries: captured.entries,
-      findings: captured.findings,
+      agentState: {
+        ...agentCaptured.source,
+        entries: agentCaptured.entries,
+        reconstruction: 'isolated-claude-config-dir-with-project-path-remap',
+      },
+      findings: [...captured.findings, ...agentCaptured.findings],
       reports,
       readiness,
     };
@@ -468,13 +567,24 @@ export async function validateCapsule(capsuleInput) {
     errors.push({ code: 'manifest-digest-mismatch' });
   }
 
-  const seen = new Set();
-  for (const entry of manifest.entries ?? []) {
+  const entryGroups = [
+    { name: 'repository', entries: manifest.entries ?? [], payloadRoot: 'payload/repository' },
+    { name: 'claude-home', entries: manifest.agentState?.entries ?? [], payloadRoot: 'payload/claude-home' },
+  ];
+  const seenPayloads = new Set();
+  for (const { name, entries } of entryGroups) {
+    const seen = new Set();
+    for (const entry of entries) {
     if (seen.has(entry.logicalPath)) {
       errors.push({ code: 'duplicate-logical-path', path: entry.logicalPath });
       continue;
     }
     seen.add(entry.logicalPath);
+    if (seenPayloads.has(entry.payloadPath)) {
+      errors.push({ code: 'duplicate-payload-path', path: entry.payloadPath });
+      continue;
+    }
+    seenPayloads.add(entry.payloadPath);
     let payload;
     try {
       payload = safeJoin(capsule, entry.payloadPath);
@@ -484,7 +594,7 @@ export async function validateCapsule(capsuleInput) {
     }
     const stats = await lstat(payload).catch(() => null);
     if (!stats) {
-      errors.push({ code: 'missing-payload', path: entry.logicalPath });
+      errors.push({ code: 'missing-payload', root: name, path: entry.logicalPath });
       continue;
     }
     if (entry.kind === 'file') {
@@ -500,16 +610,20 @@ export async function validateCapsule(capsuleInput) {
         errors.push({ code: 'payload-symlink-target-mismatch', path: entry.logicalPath });
       }
     }
+    }
   }
 
-  const payloadRoot = path.join(capsule, 'payload', 'repository');
-  if (await pathExists(payloadRoot)) {
+  for (const group of entryGroups) {
+    const payloadRoot = path.join(capsule, ...group.payloadRoot.split('/'));
+    const expected = new Set(group.entries.map((entry) => entry.logicalPath));
+    if (await pathExists(payloadRoot)) {
     const payloadEntries = (await walkTree(payloadRoot)).map((entry) => entry.logicalPath);
     for (const extra of payloadEntries) {
-      if (!seen.has(extra)) errors.push({ code: 'unreferenced-payload', path: extra });
+      if (!expected.has(extra)) errors.push({ code: 'unreferenced-payload', root: group.name, path: extra });
     }
   } else {
-    errors.push({ code: 'missing-payload-root' });
+    errors.push({ code: 'missing-payload-root', root: group.name });
+    }
   }
 
   for (const [reportFile, expectedDigest] of Object.entries(manifest.reports ?? {})) {
@@ -539,12 +653,21 @@ async function destinationProbe(destination) {
   return probeFilesystem(parent);
 }
 
-export async function createRestorePlan({ capsule: capsuleInput, destination: destinationInput }) {
+export async function createRestorePlan({
+  capsule: capsuleInput,
+  destination: destinationInput,
+  claudeDestination: claudeDestinationInput,
+}) {
   assertNodeVersion();
   if (!capsuleInput || !destinationInput) throw new Error('Plan requires --capsule and --destination.');
   const capsule = await resolveExistingDirectory(path.resolve(capsuleInput), 'Capsule');
   const destination = path.resolve(destinationInput);
+  const claudeDestination = path.resolve(claudeDestinationInput ?? `${destination}.claude-home`);
   if (pathsOverlap(capsule, destination)) throw new Error('Capsule and restore destination must not overlap.');
+  if (pathsOverlap(capsule, claudeDestination)) throw new Error('Capsule and Claude restore destination must not overlap.');
+  if (pathsOverlap(destination, claudeDestination)) {
+    throw new Error('Repository and Claude restore destinations must be separate, non-overlapping paths.');
+  }
   const validation = await validateCapsule(capsule);
   const manifest = await readJson(path.join(capsule, 'manifest.json'));
   const blockers = [];
@@ -555,18 +678,39 @@ export async function createRestorePlan({ capsule: capsuleInput, destination: de
   if (manifest.readiness.domains.gitState.status !== 'ready') {
     blockers.push({ code: 'git-state-not-ready', findings: manifest.readiness.domains.gitState.findings });
   }
+  if (manifest.readiness.domains.agentState.status !== 'ready') {
+    blockers.push({ code: 'agent-state-not-ready', findings: manifest.readiness.domains.agentState.findings });
+  }
   const git = await probeGit('git').catch((error) => {
     blockers.push({ code: 'git-prerequisite-unavailable', message: error.message });
     return null;
   });
   const probe = await destinationProbe(destination);
+  const claudeProbe = await destinationProbe(claudeDestination);
   if (!probe.capabilities.atomicRename) blockers.push({ code: 'destination-atomic-rename-unavailable' });
   if (!probe.capabilities.symlink && manifest.entries.some((entry) => entry.kind === 'symlink')) {
     blockers.push({ code: 'destination-symlink-unavailable' });
   }
+  if (!claudeProbe.capabilities.atomicRename) blockers.push({ code: 'claude-destination-atomic-rename-unavailable' });
+  if (!claudeProbe.capabilities.symlink && (manifest.agentState?.entries ?? []).some((entry) => entry.kind === 'symlink')) {
+    blockers.push({ code: 'claude-destination-symlink-unavailable' });
+  }
   const destinationCollisions = collisionFindings(manifest.entries, probe);
   blockers.push(...destinationCollisions.map((finding) => ({
     code: `destination-${finding.code}`,
+    paths: finding.paths,
+  })));
+  const mappedAgentEntries = (manifest.agentState?.entries ?? []).map((entry) => ({
+    ...entry,
+    logicalPath: restoredClaudeLogicalPath(
+      entry.logicalPath,
+      manifest.agentState.projectKey,
+      destination,
+    ),
+  }));
+  const claudeCollisions = collisionFindings(mappedAgentEntries, claudeProbe);
+  blockers.push(...claudeCollisions.map((finding) => ({
+    code: `claude-destination-${finding.code}`,
     paths: finding.paths,
   })));
 
@@ -605,6 +749,21 @@ export async function createRestorePlan({ capsule: capsuleInput, destination: de
     hardlinkGroup: entry.hardlinkGroup,
     mode: entry.metadata?.mode,
   }));
+  const agentOperations = mappedAgentEntries.map((entry) => ({
+    operation: entry.kind === 'directory'
+      ? 'mkdir'
+      : entry.kind === 'symlink'
+        ? 'symlink'
+        : entry.hardlinkGroup
+          ? 'write-or-hardlink'
+          : 'write-file',
+    logicalPath: entry.logicalPath,
+    sourceLogicalPath: manifest.agentState.entries.find((sourceEntry) => sourceEntry.payloadPath === entry.payloadPath)?.logicalPath,
+    sourcePayload: entry.payloadPath,
+    expectedSha256: entry.sha256,
+    hardlinkGroup: entry.hardlinkGroup,
+    mode: entry.metadata?.mode,
+  }));
   const planWithoutDigest = {
     schema: RESTORE_PLAN_SCHEMA,
     planId: newId('plan'),
@@ -613,13 +772,17 @@ export async function createRestorePlan({ capsule: capsuleInput, destination: de
     capsuleId: manifest.packageId,
     manifestDigest: manifest.manifestDigest,
     destination,
+    claudeDestination,
+    activation: `CLAUDE_CONFIG_DIR=${claudeDestination}`,
     runtime: { name: 'node', version: process.versions.node },
     git,
     destinationProbe: probe,
+    claudeDestinationProbe: claudeProbe,
     validation,
     executable: blockers.length === 0,
     blockers,
     operations,
+    agentOperations,
     declaredVariances: variances,
     approvalRequired: true,
   };
@@ -673,6 +836,17 @@ async function verifyGitAfterRestore({ destination, manifest, git }) {
   return { valid: mismatches.length === 0, mismatches, snapshot: actual };
 }
 
+async function applyTreeEntries({ capsule, staging, entries, variances }) {
+  const hardlinks = new Map();
+  const directories = entries.filter((entry) => entry.kind === 'directory');
+  const nonDirectories = entries.filter((entry) => entry.kind !== 'directory');
+  for (const entry of directories) await applyEntry({ capsule, staging, entry, hardlinks, variances });
+  for (const entry of nonDirectories) await applyEntry({ capsule, staging, entry, hardlinks, variances });
+  for (const entry of [...directories].sort((a, b) => b.logicalPath.length - a.logicalPath.length)) {
+    await applyFileMetadata(safeJoin(staging, entry.logicalPath), entry, variances);
+  }
+}
+
 export async function restoreFromPlan({ plan: planInput, approve = false, receipt: receiptInput }) {
   assertNodeVersion();
   if (!approve) throw new Error('Actual restore requires explicit --approve.');
@@ -687,24 +861,43 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
     throw new Error('Capsule no longer matches the validated restore plan.');
   }
   if (await pathExists(plan.destination)) throw new Error(`Destination must not exist: ${plan.destination}`);
+  if (await pathExists(plan.claudeDestination)) {
+    throw new Error(`Claude destination must not exist: ${plan.claudeDestination}`);
+  }
   const receiptPath = receiptInput
     ? path.resolve(receiptInput)
     : `${planPath}.receipt.json`;
   if (pathsOverlap(receiptPath, plan.destination)) {
     throw new Error('Receipt path must be outside the restored repository.');
   }
+  if (pathsOverlap(receiptPath, plan.claudeDestination)) {
+    throw new Error('Receipt path must be outside the restored Claude home.');
+  }
   const manifest = await readJson(path.join(plan.capsulePath, 'manifest.json'));
   const git = await probeGit(plan.git?.path ?? manifest.git.prerequisite.path);
   const parent = path.dirname(plan.destination);
+  const claudeParent = path.dirname(plan.claudeDestination);
   await ensureDirectory(parent, 'Destination parent');
+  await ensureDirectory(claudeParent, 'Claude destination parent');
   const currentProbe = await probeFilesystem(parent);
+  const currentClaudeProbe = await probeFilesystem(claudeParent);
   if (!currentProbe.capabilities.atomicRename) {
     throw new Error('Destination no longer passes the atomic rename capability probe.');
   }
   if (!currentProbe.capabilities.symlink && manifest.entries.some((entry) => entry.kind === 'symlink')) {
     throw new Error('Destination no longer supports required symbolic links.');
   }
+  if (!currentClaudeProbe.capabilities.atomicRename) {
+    throw new Error('Claude destination no longer passes the atomic rename capability probe.');
+  }
+  if (!currentClaudeProbe.capabilities.symlink && manifest.agentState.entries.some((entry) => entry.kind === 'symlink')) {
+    throw new Error('Claude destination no longer supports required symbolic links.');
+  }
   const staging = path.join(parent, `.claude-replicant-restore-${manifest.packageId}-${randomUUID()}`);
+  const claudeStaging = path.join(
+    claudeParent,
+    `.claude-replicant-claude-restore-${manifest.packageId}-${randomUUID()}`,
+  );
   const restoreLockPath = path.join(
     parent,
     `.claude-replicant-lock-${digestObject(plan.destination).slice(0, 20)}`,
@@ -720,18 +913,17 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
     await unlink(restoreLockPath).catch(() => {});
   }
   const variances = [...plan.declaredVariances];
-  const hardlinks = new Map();
   const startedAt = isoNow();
+  const mappedAgentEntries = manifest.agentState.entries.map((entry) => ({
+    ...entry,
+    logicalPath: restoredClaudeLogicalPath(entry.logicalPath, manifest.agentState.projectKey, plan.destination),
+  }));
 
   await mkdir(staging, { mode: 0o700 });
+  await mkdir(claudeStaging, { mode: 0o700 });
   try {
-    const directories = manifest.entries.filter((entry) => entry.kind === 'directory');
-    const nonDirectories = manifest.entries.filter((entry) => entry.kind !== 'directory');
-    for (const entry of directories) await applyEntry({ capsule: plan.capsulePath, staging, entry, hardlinks, variances });
-    for (const entry of nonDirectories) await applyEntry({ capsule: plan.capsulePath, staging, entry, hardlinks, variances });
-    for (const entry of [...directories].sort((a, b) => b.logicalPath.length - a.logicalPath.length)) {
-      await applyFileMetadata(safeJoin(staging, entry.logicalPath), entry, variances);
-    }
+    await applyTreeEntries({ capsule: plan.capsulePath, staging, entries: manifest.entries, variances });
+    await applyTreeEntries({ capsule: plan.capsulePath, staging: claudeStaging, entries: mappedAgentEntries, variances });
 
     const treeVerification = await verifyTree(staging, manifest.entries);
     if (!treeVerification.valid) {
@@ -741,13 +933,24 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
     if (!gitVerification.valid) {
       throw new Error(`Restored Git verification failed: ${JSON.stringify(gitVerification.mismatches)}`);
     }
-    if (await pathExists(plan.destination)) {
-      throw new Error(`Destination appeared during restore; refusing finalization: ${plan.destination}`);
+    const agentVerification = await verifyTree(claudeStaging, mappedAgentEntries);
+    if (!agentVerification.valid) {
+      throw new Error(`Restored Claude state verification failed: ${JSON.stringify(agentVerification.errors)}`);
     }
-    await rename(staging, plan.destination);
+    if (await pathExists(plan.destination) || await pathExists(plan.claudeDestination)) {
+      throw new Error('A restore destination appeared during restore; refusing finalization.');
+    }
+    await rename(claudeStaging, plan.claudeDestination);
+    try {
+      await rename(staging, plan.destination);
+    } catch (error) {
+      await rename(plan.claudeDestination, claudeStaging).catch(() => {});
+      throw error;
+    }
     const postRenameTree = await verifyTree(plan.destination, manifest.entries);
     const postRenameGit = await verifyGitAfterRestore({ destination: plan.destination, manifest, git });
-    if (!postRenameTree.valid || !postRenameGit.valid) {
+    const postRenameAgent = await verifyTree(plan.claudeDestination, mappedAgentEntries);
+    if (!postRenameTree.valid || !postRenameGit.valid || !postRenameAgent.valid) {
       throw new Error('Post-rename verification failed; restored destination retained for diagnosis.');
     }
     const receipt = {
@@ -758,15 +961,18 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
       capsuleId: manifest.packageId,
       manifestDigest: manifest.manifestDigest,
       destination: plan.destination,
+      claudeDestination: plan.claudeDestination,
+      activation: plan.activation,
       startedAt,
       completedAt: isoNow(),
       approved: true,
       result: 'restored-and-verified',
       treeVerification: postRenameTree,
       gitVerification: postRenameGit,
+      agentStateVerification: postRenameAgent,
       declaredVariances: variances,
       limitations: [
-        'Agent state, credentials, dependencies, xattrs, ACLs, BSD flags, ownership, and birthtime were not restored.',
+        'Dedicated credential stores, dependencies, xattrs, ACLs, BSD flags, ownership, and birthtime were not restored.',
       ],
     };
     await writeJsonAtomic(receiptPath, receipt);
@@ -774,6 +980,7 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
     return { ...receipt, receiptPath };
   } catch (error) {
     if (await pathExists(staging)) await cleanup(staging);
+    if (await pathExists(claudeStaging)) await cleanup(claudeStaging);
     await releaseRestoreLock();
     throw error;
   }

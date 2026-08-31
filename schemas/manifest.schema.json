@@ -12,6 +12,7 @@
     "runtime",
     "git",
     "entries",
+    "agentState",
     "reports",
     "readiness",
     "manifestDigest"
@@ -19,6 +20,10 @@
   "properties": {
     "schemaVersion": { "const": "1.0.0" },
     "packageType": { "const": "forensic-backup" },
+    "agentState": {
+      "type": "object",
+      "required": ["adapter", "rootAlias", "projectKey", "sessionIds", "entries", "reconstruction"]
+    },
     "manifestDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
   },
   "additionalProperties": true

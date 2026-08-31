@@ -6,7 +6,7 @@ Preferred runtime: Bun, with a supported Node.js fallback
 
 ## 1. Purpose
 
-Claude Replicant's primary backup is a **canonical full-fidelity migration capsule** for a Claude Code project. Its non-negotiable purpose is to recreate the project on another Mac as faithfully as feasible and provide comparable context for continuing work. The capsule preserves the project working tree and Git state, including captured uncommitted changes; locally available Claude Code project, session, and memory evidence; generated and temporary artifacts in the declared capture scope; relevant configuration; tool, runtime, and dependency environment information; and a verifiable inventory. Native reinjection of Claude Code session or memory state at a different absolute path or on another Mac is an evidence question, not a current promise; until compatibility is proven, the guaranteed outcome is a validated project restore plus a provenance-linked handoff package.
+Claude Replicant's primary backup is a **canonical full-fidelity migration capsule** for a Claude Code project. Its non-negotiable purpose is to recreate the project on another Mac as faithfully as feasible and provide comparable context for continuing work. The capsule preserves the project working tree and Git state, including captured uncommitted changes; locally available Claude Code project, session, memory, subagent, plan, task, skill, command, plugin, hook, and settings state; generated and temporary artifacts in the declared capture scope; relevant configuration; tool, runtime, and dependency environment information; and a verifiable inventory. Part 1 restores captured Claude filesystem state into a new isolated configuration directory, remaps the path-derived project key, and returns the `CLAUDE_CONFIG_DIR` activation value without overwriting an existing Claude home.
 
 The system also derives smaller packages for understanding, cross-agent use, or sharing. Those derivatives may be deliberately lossy or redacted, but they never replace, rewrite, or become the canonical backup. Claude Replicant treats an agent session as evidence rather than as a single opaque transcript: repository state, agent-created memory, session records, temporary outputs, settings, logs, environment facts, and provenance are collected into inspectable packages with explicit privacy and integrity controls.
 
@@ -29,18 +29,19 @@ Claude Replicant itself is distributed and experienced as a plugin. The plugin e
 - Expose explicit plugin actions without mutating, replacing, or polluting the user's normal agent task context.
 - Default to local processing and least disclosure.
 
-### 2.1 Part 1 delivery boundary: repository migration
+### 2.1 Part 1 delivery boundary: repository and local Claude state migration
 
-Part 1 is complete only when Claude Replicant can back up and **actually restore** the selected repository on another Mac or isolated destination macOS environment. It is not satisfied by a summary, inventory, dry-run plan, or agent handoff alone.
+Part 1 is complete only when Claude Replicant can back up and **actually restore** the selected repository and locally available Claude Code state on another Mac or isolated destination macOS environment. It is not satisfied by a summary, inventory, dry-run plan, or agent handoff alone.
 
 Part 1 includes:
 
 - the complete selected working-tree scope with byte integrity, including declared untracked and ignored/generated items;
 - the declared Git state required to reproduce the captured repository state, including object/refs/HEAD/index and staged/unstaged state to the extent proven safe and portable by Section 7.1;
+- Claude Code project transcripts, subagents/tool results, memory, file history, tasks/todos, plans, and user agent configuration;
 - the F0 metadata envelope, source/destination capability probes, manifest/inventory hashes, secret exclusions, live-consistency findings, and restore readiness;
-- transfer to a different absolute path, plugin-free Node validation, destination reassessment, a versioned dry-run restore plan, explicit approval, an actual isolated restore write, post-restore byte/Git verification, and a restore receipt.
+- transfer to a different absolute path, plugin-free Node validation, destination reassessment, a versioned dry-run restore plan, explicit approval, actual isolated repository and Claude-home restore writes, project-key remapping, post-restore byte/Git/agent-state verification, and a restore receipt.
 
-Part 1 explicitly does **not** wait for Claude Code or Codex session/memory injection, user-global agent-environment capture, semantic/model analysis, credential migration, cross-agent contextual continuity, encrypted credential support, or native agent adapters. Project-scoped agent artifacts and the Agent Environment Profile may be preserved as evidence or marked deferred, but failure to interpret or inject them cannot delay a complete repository-data migration.
+Part 1 includes a Claude Code filesystem adapter and treats confirmed execution as authorization for its declared repository and Claude-state scope; it does not require per-artifact privacy prompts. Part 1 excludes dedicated credential stores, provider-side state, model internals, semantic/model analysis, dependency installation, external accounts, and Codex-native task restoration.
 
 Part 1 acceptance requires the Section 12.1 fixture to prove source-to-destination restoration at a different path: every included regular-file hash matches; symlink semantics and supported metadata match; branch/HEAD/refs/index and staged/unstaged status match the declared Git expectations; required untracked/ignored items exist; no repository-controlled code executes; corruption prevents restore; and the receipt enumerates every source/destination variance. Unsupported xattrs, ACLs, flags, timestamps, filename semantics, path-bound Git state, external objects, submodules, or other portability gaps must be reported honestly and must prevent an unqualified `ready`/full-fidelity claim. A content-complete restore may still be useful with `action-required`, but it cannot silently satisfy a stricter metadata promise.
 
@@ -90,7 +91,7 @@ Each agent integration provides only:
 
 1. source locators and parsers for documented or observed agent artifacts;
 2. a mapping into normalized core records;
-3. presentation of capture/restore plans and consent prompts in the agent's UX;
+3. presentation of capture/restore plans and the single explicit execution confirmation in the agent's UX;
 4. generation of agent-native handoff material from normalized observations;
 5. capability/version metadata about the integration itself.
 
@@ -314,10 +315,10 @@ Readiness is also domain-scoped. `repositoryData`, `gitState`, `filesystemMetada
 3. **Discover:** adapters enumerate the full declared scope: the working tree and Git state, Claude Code session/memory/project artifacts, temporary/generated files, settings/logs, environment facts, and related repository evidence. Discovery is read-only and records inaccessible locations.
 4. **Classify:** assign artifact kind, ownership, sensitivity, trust, size, and retention class. Detect symlinks and prevent traversal outside approved roots unless separately authorized.
 5. **Plan:** apply the canonical capture policy and produce an inclusion/exclusion preview with size and risk estimates.
-6. **Approve:** obtain explicit approval for sensitive roots, raw session/log capture, files outside the project, and any exceptional inclusion.
+6. **Approve:** the confirmed capture command authorizes the declared repository and Claude-state roots as one operation; no additional per-artifact privacy approval is required.
 7. **Collect:** copy into a private staging directory under the chosen store without executing repository or artifact content. Preserve originals and record read-time races or mutations.
 8. **Preserve:** write the canonical capsule. Redaction/minimization applies to derivatives or to items explicitly excluded by the canonical capture policy; every exception becomes a readiness finding. Transform a copy, never the source.
-9. **Package:** canonicalize the manifest, hash final stored bytes, and write the inventory, factual JSON/Markdown capture reports, Agent Environment Profile envelope, restore-readiness assessment, redaction report, and validation inputs. No session summarization, repository interpretation, or model call is required; unsafe profile extraction is recorded as deferred.
+9. **Package:** canonicalize the manifest, hash final stored bytes, and write the inventory, factual JSON/Markdown/static-HTML capture reports, Agent Environment Profile envelope, restore-readiness assessment, redaction report, and validation inputs. No session summarization, repository interpretation, or model call is required.
 10. **Validate/finalize:** independently reopen the staged capsule, validate schema, inventory closure, hashes, path safety, provenance, and policy assertions, then atomically move it to `capsule/<capsule-id>/` and transactionally append the catalog entry.
 11. **Return:** report the capsule ID, chosen store path, validation/readiness status, and known gaps. Offer analysis or derivation as follow-on actions rather than extending the capture operation.
 
@@ -482,18 +483,18 @@ Restoration has two ordered stages: faithful data reconstruction first, then Cla
 4. Restore the project data into a staging directory first: working-tree bytes and permitted metadata, then Git administrative state, refs/index and captured uncommitted changes, then scoped generated/temporary artifacts and relevant configuration. Do not run repository code, package lifecycle scripts, hooks, or binaries.
 5. Verify restored content and Git state against the inventory and expected hashes. Confirm branch/HEAD/index/worktree status and enumerate every variance. Promote to the requested location only after approval; never overwrite an existing project silently.
 6. Recreate the recorded tool/runtime/dependency environment where safe and authorized. Prefer lockfiles and recorded versions, but treat installation as a separate approved action because it may execute third-party code or require network access. Platform-bound binaries must be rebuilt or reacquired for the destination architecture rather than blindly reused.
-7. After project data passes verification, install or locate a compatible Claude Code version. Native project/session/memory reinjection is disabled unless the Phase 0 evidence spike and a version-specific adapter prove it safe across the relevant source/destination paths and versions. Map machine-specific paths explicitly. Unproven or unsupported native state is preserved as evidence and rendered as a handoff rather than force-written.
+7. After project data passes verification, restore captured Claude Code filesystem state into a new, nonexistent isolated Claude home, remap the path-derived project key, verify every restored entry, and return the exact `CLAUDE_CONFIG_DIR` activation value. Never merge into or overwrite an existing Claude home in Part 1.
 8. Ask the user to reconnect Claude Code and reauthenticate external services, source hosts, registries, or licensed tools. Never copy, activate, or infer credentials/accounts without specific authorization; verify access without recording new secret values.
 9. Give Claude Code the validated project summary plus appropriate normalized observations and evidence references so it can continue with comparable context. “Comparable” does not promise identical hidden/provider-side model state.
 10. Run non-executing structural checks by default and offer recorded project validation commands for separate approval. Emit a restore receipt with capsule/derivative digests, target identity, operations, conflicts, variances, resulting hashes, runtime, adapter version, reconnection status, and outstanding user actions.
 
-For Claude Code, the adapter reconnects only after faithful project reconstruction and renders normalized context into supported project/session handoff surfaces. It may restore approved agent-local artifacts only when the Phase 0 evidence table proves their format/version/path behavior compatible. For Codex, the adapter provides the same normalized context through its task/workspace surfaces. Neither adapter impersonates the other agent's private or provider-side state. If a native memory format cannot be safely written, the adapter supplies an explicit handoff document instead.
+For Claude Code, the Part 1 adapter reconstructs the captured local filesystem state under an isolated `CLAUDE_CONFIG_DIR` after repository verification. For Codex, a later adapter will provide normalized context through its task/workspace surfaces. Neither adapter impersonates the other agent's private or provider-side state.
 
 Cross-agent summaries distinguish sourced facts, agent-authored decisions, tool outcomes, and inference. Evidence references let either agent request the smallest relevant artifact. Context-budget selection is deterministic and policy-aware so changing agents does not silently change the disclosure boundary.
 
 ### 11.1 Comparable-context acceptance
 
-The Phase 0 evidence spike tests a synthetic Claude Code project captured on one Mac/path and reconstructed at a different absolute path on another isolated macOS environment. It inventories which local Claude artifacts are project-bound, path-bound, version-bound, checksummed, indexed elsewhere, or safe to relocate. The spike may use controlled manual experiments or purpose-built synthetic tooling and may run in parallel with Phase 1 core work, provided it uses isolated synthetic state and does not block the capture/validator/restore-plan slice. Tests compare three outcomes: native state accepted by Claude Code, native state ignored/rejected/corrupted, and handoff-only continuation. The spike is evidence collection only: it does not authorize writes to real user Claude state, and no production adapter may write Claude Code session/memory state until the relevant artifact/version class has repeatable positive evidence and a later implementation phase approves that write path.
+The compatibility fixture tests a synthetic Claude Code project captured at one path and reconstructed at a different absolute path with an isolated Claude home. It inventories project-bound and path-bound artifacts, proves byte-level reconstruction and project-key remapping, and never writes into an existing real user Claude home.
 
 “Comparable context” is accepted when, from the restored project plus allowed handoff material, a fresh Claude Code session can, without access to the source machine:
 
@@ -554,15 +555,15 @@ Schemas use semantic versions. Readers reject unsupported major versions, tolera
 ### Phase 1 — thin portable end-to-end slice
 
 - Implement exactly one portable reference/conformance runtime path first: supported Node.js. This sequencing proves the required no-plugin destination path; it does not change the product policy that Bun becomes preferred after parity is established.
-- Implement explicit-source project capture to an explicit destination store, immutable capsule finalization, manifest/inventory/SHA-256 generation, factual capture/readiness reports, a canonical Agent Environment Profile envelope that may report `deferred`, independent validation, corruption detection, destination probing, a versioned dry-run restore plan for a different path, and—only after validation and explicit approval—an actual isolated repository/Git restore with verification and receipt.
-- Limit scope to the selected repository and synthetic explicitly supplied Claude fixture artifacts. Do not add agent adapters, semantic/model analysis, agent-state writes, dependency installation, credentials, encryption, signing, marketplace integration, cross-agent continuity, or standalone binaries.
+- Implement explicit-source repository and Claude-home capture to an explicit destination store, immutable capsule finalization, manifest/inventory/SHA-256 generation, factual JSON/Markdown/HTML reports, independent validation, corruption detection, dual-destination probing, a versioned dry-run restore plan for a different path, and—only after validation and explicit approval—an actual isolated repository/Git/Claude-state restore with verification and receipt.
+- Include the selected project's Claude sessions/memory plus user agent configuration through the Claude Code adapter. Do not add semantic/model analysis, dependency installation, dedicated credential stores, encryption, signing, cross-agent continuity, or standalone binaries.
 - Pass the Section 12.1 source-to-destination restore fixture under Node and document every unsupported F0 metadata/Git/Claude capability as an `action-required` or `not-ready` finding. Part 1 cannot be declared complete until repository-data and declared Git-state acceptance checks pass after actual restore.
 
 ### Phase 2 — Bun-first parity and portability hardening
 
 - Add runtime selection and the Bun implementation as the preferred healthy path, retaining the Node reference path; require semantic package parity and Bun-created/Node-validated transfer tests.
 - Harden APFS/non-APFS capability probing, metadata envelopes, live-write detection, inert Git observation, crash-safe staging, store catalog rebuilding, and the portable Node transfer CLI.
-- Harden the already-isolated Part 1 restore path across supported Mac/filesystem combinations; keep in-place overwrite, dependency installation, and agent-state writes disabled.
+- Harden the already-isolated Part 1 restore path across supported Mac/filesystem combinations; keep in-place overwrite and dependency installation disabled.
 
 ### Phase 3 — plugin surface and scoped adapters
 

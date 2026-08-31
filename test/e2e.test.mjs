@@ -115,24 +115,52 @@ async function createFixture(root) {
   );
   await chmod(path.join(repository, '.git', 'hooks', 'post-checkout'), 0o700);
   await git(repository, ['config', 'core.fsmonitor', hostileHelper]);
-  return { repository, session, executionMarker };
+
+  const claudeHome = path.join(root, 'claude-home');
+  const projectKey = path.resolve(repository).replaceAll(path.sep, '-');
+  const claudeProject = path.join(claudeHome, 'projects', projectKey);
+  const sessionId = '11111111-2222-4333-8444-555555555555';
+  await mkdir(path.join(claudeProject, sessionId, 'subagents'), { recursive: true });
+  await mkdir(path.join(claudeProject, 'memory'), { recursive: true });
+  await mkdir(path.join(claudeHome, 'agents'), { recursive: true });
+  await mkdir(path.join(claudeHome, 'skills', 'fixture-skill'), { recursive: true });
+  await mkdir(path.join(claudeHome, 'plans'), { recursive: true });
+  await writeFile(path.join(claudeHome, 'CLAUDE.md'), 'Global Claude instructions.\n');
+  await writeFile(path.join(claudeHome, 'settings.json'), '{"theme":"dark"}\n');
+  await writeFile(path.join(claudeHome, '.credentials.json'), '{"token":"must-not-copy"}\n');
+  await writeFile(path.join(root, '.claude.json'), '{"projects":{"fixture":{"mcpServers":{}}}}\n');
+  await writeFile(path.join(claudeHome, 'agents', 'reviewer.md'), 'Review agent.\n');
+  await writeFile(path.join(claudeHome, 'skills', 'fixture-skill', 'SKILL.md'), 'Fixture skill.\n');
+  await writeFile(path.join(claudeHome, 'plans', 'fixture-plan.md'), 'Project plan.\n');
+  await writeFile(path.join(claudeProject, 'memory', 'MEMORY.md'), 'Remember the migration goal.\n');
+  const claudeSession = path.join(claudeProject, `${sessionId}.jsonl`);
+  await writeFile(
+    claudeSession,
+    `${JSON.stringify({ type: 'user', cwd: repository, sessionId, message: 'capture everything' })}\n`.repeat(30_000),
+  );
+  await writeFile(
+    path.join(claudeProject, sessionId, 'subagents', 'agent-review.jsonl'),
+    `${JSON.stringify({ type: 'assistant', sessionId, result: 'reviewed' })}\n`,
+  );
+  return { repository, session, claudeSession, claudeHome, sessionId, executionMarker };
 }
 
 test('Part 1 captures, validates, rejects corruption, plans, restores, and verifies', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'claude-replicant-e2e-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const { repository, session, executionMarker } = await createFixture(root);
+  const { repository, claudeSession, claudeHome, sessionId, executionMarker } = await createFixture(root);
   const store = path.join(root, 'capsule-store');
 
-  const preview = await captureRepository({ source: repository, store, confirm: false });
+  const preview = await captureRepository({ source: repository, store, claudeHome, confirm: false });
   assert.equal(preview.mode, 'preview');
+  assert.equal(preview.claudeState.sessionCount, 1);
   await assert.rejects(lstat(store));
 
   const startSignal = path.join(root, 'writer-start');
   const readySignal = path.join(root, 'writer-ready');
   const writer = spawn(process.execPath, [
     path.join(import.meta.dirname, 'helper-live-writer.mjs'),
-    session,
+    claudeSession,
     startSignal,
     readySignal,
   ], { stdio: 'inherit' });
@@ -140,6 +168,7 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   const captured = await captureRepository({
     source: repository,
     store,
+    claudeHome,
     confirm: true,
     beforeTreeCapture: async () => {
       await writeFile(startSignal, 'start\n');
@@ -172,6 +201,13 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   assert.ok(manifest.findings.some((finding) => finding.code === 'live-append-stable-prefix'));
   assert.equal(manifest.readiness.domains.repositoryData.status, 'ready');
   assert.equal(manifest.readiness.domains.gitState.status, 'ready');
+  assert.equal(manifest.readiness.domains.agentState.status, 'ready');
+  assert.equal(manifest.policy.agentState, 'captured-with-execution-as-authorization');
+  assert.ok(manifest.agentState.entries.some((entry) => entry.logicalPath.endsWith(`${sessionId}.jsonl`)));
+  assert.ok(manifest.agentState.entries.some((entry) => entry.logicalPath.endsWith('memory/MEMORY.md')));
+  assert.ok(manifest.agentState.entries.some((entry) => entry.logicalPath === 'agents/reviewer.md'));
+  assert.equal(await lstat(path.join(captured.capsulePath, 'capture-report.html')).then(() => true), true);
+  await assert.rejects(lstat(path.join(captured.capsulePath, 'payload', 'claude-home', '.credentials.json')));
 
   const inventoryText = await readFile(path.join(captured.capsulePath, 'inventory.jsonl'), 'utf8');
   assert.match(inventoryText, /credential-filename-policy/);
@@ -200,6 +236,7 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   assert.equal(receipt.result, 'restored-and-verified');
   assert.equal(receipt.treeVerification.valid, true);
   assert.equal(receipt.gitVerification.valid, true);
+  assert.equal(receipt.agentStateVerification.valid, true);
   await assert.rejects(lstat(executionMarker));
 
   assert.equal(await readFile(path.join(destination, 'untracked-notes.txt'), 'utf8'), 'untracked\n');
@@ -213,6 +250,16 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
     (await lstat(path.join(destination, 'hardlink-b.txt'))).ino,
   );
   assert.equal((await readJson(receiptPath)).manifestDigest, manifest.manifestDigest);
+  const restoredProjectKey = path.resolve(destination).replaceAll(path.sep, '-');
+  assert.match(
+    await readFile(path.join(receipt.claudeDestination, 'projects', restoredProjectKey, `${sessionId}.jsonl`), 'utf8'),
+    /capture everything/,
+  );
+  assert.equal(
+    await readFile(path.join(receipt.claudeDestination, 'agents', 'reviewer.md'), 'utf8'),
+    'Review agent.\n',
+  );
+  assert.match(await readFile(path.join(receipt.claudeDestination, '.claude.json'), 'utf8'), /mcpServers/);
 
   await assert.rejects(
     restoreFromPlan({ plan: planPath, approve: true, receipt: path.join(root, 'second.json') }),

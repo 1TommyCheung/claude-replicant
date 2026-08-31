@@ -12,15 +12,16 @@ import {
 const HELP = `Claude Replicant Part 1
 
 Usage:
-  node src/cli.mjs capture --source <repo> --store <folder> [--confirm]
+  node src/cli.mjs capture --source <repo> --store <folder> [--claude-home <folder>] [--confirm]
   node src/cli.mjs validate --capsule <capsule>
-  node src/cli.mjs plan --capsule <capsule> --destination <new-path> [--output <plan.json>]
+  node src/cli.mjs plan --capsule <capsule> --destination <new-path> [--claude-destination <new-path>] [--output <plan.json>]
   node src/cli.mjs restore --plan <plan.json> --approve [--receipt <receipt.json>]
 
 Safety:
   capture previews by default and writes only with --confirm.
   restore requires --approve and refuses an existing destination.
-  source, store, capsule, destination, plan, and receipt paths are always explicit.
+  capture includes restorable Claude Code sessions and agent state from CLAUDE_CONFIG_DIR.
+  restore writes an isolated Claude home (default: <destination>.claude-home).
 `;
 
 function parseArgs(argv) {
@@ -58,6 +59,7 @@ async function main() {
     result = await captureRepository({
       source: options.source,
       store: options.store,
+      claudeHome: options.claudeHome,
       gitPath: options.git ?? 'git',
       confirm: options.confirm === true,
       maxEntries: numberOption(options.maxEntries, '--max-entries'),
@@ -71,6 +73,7 @@ async function main() {
     result = await createRestorePlan({
       capsule: options.capsule,
       destination: options.destination,
+      claudeDestination: options.claudeDestination,
     });
     if (options.output) {
       const output = path.resolve(options.output);

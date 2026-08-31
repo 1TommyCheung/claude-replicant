@@ -1,7 +1,7 @@
 {
   "name": "claude-replicant",
-  "version": "0.1.2",
-  "description": "Capture, validate, plan, and safely restore repository migration capsules.",
+  "version": "0.2.0",
+  "description": "Capture and restore complete repository and Claude Code state capsules.",
   "author": {
     "name": "1TommyCheung",
     "url": "https://github.com/1TommyCheung"
