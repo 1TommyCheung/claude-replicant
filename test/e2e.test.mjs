@@ -63,6 +63,11 @@ async function waitFor(filePath, timeoutMs = 3000) {
 }
 
 function waitForExit(child) {
+  if (child.exitCode !== null) {
+    return child.exitCode === 0
+      ? Promise.resolve()
+      : Promise.reject(new Error(`helper exited ${child.exitCode}`));
+  }
   return new Promise((resolve, reject) => {
     child.once('error', reject);
     child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`helper exited ${code}`)));
@@ -122,6 +127,7 @@ async function createFixture(root) {
   const projectKey = path.resolve(repository).replaceAll(path.sep, '-');
   const claudeProject = path.join(claudeHome, 'projects', projectKey);
   const sessionId = '11111111-2222-4333-8444-555555555555';
+  const secondSessionId = '66666666-7777-4888-8999-aaaaaaaaaaaa';
   await mkdir(path.join(claudeProject, sessionId, 'subagents'), { recursive: true });
   await mkdir(path.join(claudeProject, 'memory'), { recursive: true });
   await mkdir(path.join(claudeHome, 'agents'), { recursive: true });
@@ -136,26 +142,51 @@ async function createFixture(root) {
   await writeFile(path.join(claudeHome, 'plans', 'fixture-plan.md'), 'Project plan.\n');
   await writeFile(path.join(claudeProject, 'memory', 'MEMORY.md'), 'Remember the migration goal.\n');
   const claudeSession = path.join(claudeProject, `${sessionId}.jsonl`);
+  const sessionRecord = {
+    parentUuid: null,
+    isSidechain: false,
+    type: 'user',
+    uuid: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    timestamp: '2026-08-31T12:00:00.000Z',
+    userType: 'external',
+    entrypoint: 'cli',
+    cwd: repository,
+    sessionId,
+    version: '2.1.250',
+    gitBranch: 'migration-fixture',
+    message: { role: 'user', content: 'Capture everything and preserve this session.' },
+  };
   await writeFile(
     claudeSession,
-    `${JSON.stringify({ type: 'user', cwd: repository, sessionId, message: 'capture everything' })}\n`.repeat(30_000),
+    `${JSON.stringify(sessionRecord)}\n`.repeat(30_000),
+  );
+  await writeFile(
+    path.join(claudeProject, `${secondSessionId}.jsonl`),
+    `${JSON.stringify({
+      ...sessionRecord,
+      uuid: 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff',
+      timestamp: '2026-08-31T13:00:00.000Z',
+      sessionId: secondSessionId,
+      entrypoint: 'agent-sdk',
+      message: { role: 'user', content: 'Continue the second captured session.' },
+    })}\n`,
   );
   await writeFile(
     path.join(claudeProject, sessionId, 'subagents', 'agent-review.jsonl'),
     `${JSON.stringify({ type: 'assistant', sessionId, result: 'reviewed' })}\n`,
   );
-  return { repository, session, claudeSession, claudeHome, sessionId, executionMarker };
+  return { repository, session, claudeSession, claudeHome, sessionId, secondSessionId, executionMarker };
 }
 
 test('Part 1 captures, validates, rejects corruption, plans, restores, and verifies', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'claude-replicant-e2e-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const { repository, claudeSession, claudeHome, sessionId, executionMarker } = await createFixture(root);
+  const { repository, claudeSession, claudeHome, sessionId, secondSessionId, executionMarker } = await createFixture(root);
   const store = path.join(root, 'capsule-store');
 
   const preview = await captureRepository({ source: repository, store, claudeHome, confirm: false });
   assert.equal(preview.mode, 'preview');
-  assert.equal(preview.claudeState.sessionCount, 1);
+  assert.equal(preview.claudeState.sessionCount, 2);
   await assert.rejects(lstat(store));
 
   const startSignal = path.join(root, 'writer-start');
@@ -212,6 +243,23 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   assert.ok(manifest.agentState.entries.some((entry) => entry.logicalPath === 'agents/reviewer.md'));
   assert.equal(await lstat(path.join(captured.capsulePath, 'capture-report.html')).then(() => true), true);
   await assert.rejects(lstat(path.join(captured.capsulePath, 'payload', 'claude-home', '.credentials.json')));
+  const sessionsReport = await readJson(path.join(captured.capsulePath, 'sessions.json'));
+  assert.equal(sessionsReport.total, 2);
+  assert.equal(sessionsReport.directlyResumable, 2);
+  assert.deepEqual(
+    new Set(sessionsReport.sessions.map((sessionEntry) => sessionEntry.sessionId)),
+    new Set([sessionId, secondSessionId]),
+  );
+  assert.match(sessionsReport.sessions.find((sessionEntry) => sessionEntry.sessionId === sessionId).title, /Capture everything/);
+  const captureReport = await readJson(path.join(captured.capsulePath, 'capture-report.json'));
+  assert.deepEqual(
+    new Set(captureReport.sessions.map((sessionEntry) => sessionEntry.sessionId)),
+    new Set([sessionId, secondSessionId]),
+  );
+  assert.match(await readFile(path.join(captured.capsulePath, 'capture-report.md'), 'utf8'), new RegExp(sessionId));
+  assert.match(await readFile(path.join(captured.capsulePath, 'capture-report.md'), 'utf8'), new RegExp(secondSessionId));
+  assert.match(await readFile(path.join(captured.capsulePath, 'capture-report.html'), 'utf8'), new RegExp(sessionId));
+  assert.match(await readFile(path.join(captured.capsulePath, 'capture-report.html'), 'utf8'), new RegExp(secondSessionId));
 
   const inventoryText = await readFile(path.join(captured.capsulePath, 'inventory.jsonl'), 'utf8');
   assert.match(inventoryText, /credential-filename-policy/);
@@ -273,6 +321,16 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   assert.equal(receipt.treeVerification.valid, true);
   assert.equal(receipt.gitVerification.valid, true);
   assert.equal(receipt.agentStateVerification.valid, true);
+  assert.equal(receipt.capturedAgentStateVerification.valid, true);
+  assert.equal(receipt.nativeResumeReadiness.valid, true);
+  assert.deepEqual(
+    new Set(receipt.nativeResumeReadiness.sessions.map((sessionEntry) => sessionEntry.sessionId)),
+    new Set([sessionId, secondSessionId]),
+  );
+  assert.match(await readFile(receipt.reports.markdown, 'utf8'), new RegExp(sessionId));
+  assert.match(await readFile(receipt.reports.markdown, 'utf8'), new RegExp(secondSessionId));
+  assert.match(await readFile(receipt.reports.html, 'utf8'), new RegExp(sessionId));
+  assert.match(await readFile(receipt.reports.html, 'utf8'), new RegExp(secondSessionId));
   await assert.rejects(lstat(executionMarker));
 
   assert.equal(await readFile(path.join(destination, 'untracked-notes.txt'), 'utf8'), 'untracked\n');
@@ -286,11 +344,14 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
     (await lstat(path.join(destination, 'hardlink-b.txt'))).ino,
   );
   assert.equal((await readJson(receiptPath)).manifestDigest, manifest.manifestDigest);
-  const restoredProjectKey = path.resolve(destination).replaceAll(path.sep, '-');
-  assert.match(
-    await readFile(path.join(receipt.claudeDestination, 'projects', restoredProjectKey, `${sessionId}.jsonl`), 'utf8'),
-    /capture everything/,
+  const restoredProjectKey = receipt.destination.replaceAll(path.sep, '-');
+  const restoredTranscript = await readFile(
+    path.join(receipt.claudeDestination, 'projects', restoredProjectKey, `${sessionId}.jsonl`),
+    'utf8',
   );
+  assert.match(restoredTranscript, /Capture everything/);
+  assert.match(restoredTranscript, new RegExp(receipt.destination.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.doesNotMatch(restoredTranscript, new RegExp(repository.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.equal(
     await readFile(path.join(receipt.claudeDestination, 'agents', 'reviewer.md'), 'utf8'),
     'Review agent.\n',

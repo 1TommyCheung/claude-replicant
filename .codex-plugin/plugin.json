@@ -1,7 +1,7 @@
 {
   "name": "claude-replicant",
-  "version": "0.3.0",
-  "description": "Capture and restore complete repository and Claude Code state capsules.",
+  "version": "0.4.0",
+  "description": "Capture complete Claude Code projects and natively resume restored sessions.",
   "author": {
     "name": "1TommyCheung",
     "url": "https://github.com/1TommyCheung"
@@ -12,7 +12,7 @@
   "interface": {
     "displayName": "Claude Replicant",
     "shortDescription": "Migrate repositories with Claude Code memory.",
-    "longDescription": "Claude Replicant creates integrity-checked capsules containing a repository plus Claude Code sessions, memory, agents, plans, and configuration, then restores them to isolated destinations.",
+    "longDescription": "Claude Replicant creates integrity-checked capsules containing a repository plus Claude Code sessions, memory, agents, plans, and configuration, then path-remaps and restores sessions for native Claude Code resume on another computer.",
     "developerName": "1TommyCheung",
     "category": "Productivity",
     "capabilities": [

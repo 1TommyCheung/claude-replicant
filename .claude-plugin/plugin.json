@@ -1,7 +1,7 @@
 {
   "name": "claude-replicant",
-  "version": "0.3.0",
-  "description": "Capture and restore complete repository and Claude Code state capsules.",
+  "version": "0.4.0",
+  "description": "Capture complete Claude Code projects and natively resume restored sessions.",
   "author": {
     "name": "1TommyCheung",
     "url": "https://github.com/1TommyCheung"

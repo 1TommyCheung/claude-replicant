@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claude-replicant.local/schemas/sessions/v1",
+  "title": "Claude Replicant Session Catalog",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "sourceAdapter",
+    "projectKey",
+    "sourceProjectPath",
+    "total",
+    "directlyResumable",
+    "sessions"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "sourceAdapter": { "const": "claude-code" },
+    "projectKey": { "type": "string", "minLength": 1 },
+    "sourceProjectPath": { "type": "string", "minLength": 1 },
+    "total": { "type": "integer", "minimum": 0 },
+    "directlyResumable": { "type": "integer", "minimum": 0 },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "sessionId",
+          "title",
+          "messageCount",
+          "userMessages",
+          "assistantMessages",
+          "models",
+          "gitBranches",
+          "claudeVersions",
+          "entrypoints",
+          "recordedCwds",
+          "transcriptPath",
+          "capturedBytes",
+          "subagentTranscripts",
+          "toolResultFiles",
+          "validRecords",
+          "malformedRecords",
+          "resumeById",
+          "destinationPathRemapRequired",
+          "resumeCommand"
+        ],
+        "properties": {
+          "sessionId": { "type": "string", "minLength": 1 },
+          "title": { "type": "string", "minLength": 1 },
+          "messageCount": { "type": "integer", "minimum": 0 },
+          "userMessages": { "type": "integer", "minimum": 0 },
+          "assistantMessages": { "type": "integer", "minimum": 0 },
+          "models": { "type": "array", "items": { "type": "string" } },
+          "gitBranches": { "type": "array", "items": { "type": "string" } },
+          "claudeVersions": { "type": "array", "items": { "type": "string" } },
+          "entrypoints": { "type": "array", "items": { "type": "string" } },
+          "recordedCwds": { "type": "array", "items": { "type": "string" } },
+          "transcriptPath": { "type": "string", "minLength": 1 },
+          "capturedBytes": { "type": "integer", "minimum": 0 },
+          "subagentTranscripts": { "type": "integer", "minimum": 0 },
+          "toolResultFiles": { "type": "integer", "minimum": 0 },
+          "validRecords": { "type": "integer", "minimum": 0 },
+          "malformedRecords": { "type": "integer", "minimum": 0 },
+          "resumeById": { "type": "boolean" },
+          "destinationPathRemapRequired": { "type": "boolean" },
+          "resumeCommand": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

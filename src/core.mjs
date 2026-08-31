@@ -15,9 +15,12 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  buildClaudeSessionCatalog,
   captureClaudeState,
   previewClaudeState,
+  remapRestoredClaudeState,
   restoredClaudeLogicalPath,
+  verifyRestoredClaudeSessions,
 } from './claude-state.mjs';
 import {
   applyFileMetadata,
@@ -58,6 +61,7 @@ const REPORT_FILES = [
   'capture-report.json',
   'capture-report.md',
   'capture-report.html',
+  'sessions.json',
   'agent-environment-profile.json',
   'redaction-report.json',
   'restore-readiness.json',
@@ -195,6 +199,16 @@ function collisionFindings(entries, probe) {
 }
 
 function captureMarkdown(report) {
+  const sessionRows = report.sessions.length === 0
+    ? ['_No resumable Claude Code sessions were captured._']
+    : [
+        '| Session ID | Title / first prompt | Updated | Messages | Branch | Resume |',
+        '|---|---|---:|---:|---|---|',
+        ...report.sessions.map((session) => {
+          const clean = (value) => String(value ?? '').replaceAll('|', '\\|').replace(/\s+/g, ' ');
+          return `| \`${clean(session.sessionId)}\` | ${clean(session.title)} | ${clean(session.updatedAt)} | ${session.messageCount} | ${clean(session.gitBranches.join(', '))} | \`${clean(session.resumeCommand)}\` |`;
+        }),
+      ];
   return [
     '# Claude Replicant Capture Report',
     '',
@@ -204,13 +218,20 @@ function captureMarkdown(report) {
     `- Included entries: ${report.totals.entries}`,
     `- Included bytes: ${report.totals.bytes}`,
     `- Claude state entries: ${report.agentState.entries}`,
-    `- Claude sessions: ${report.agentState.sessions}`,
+    `- Claude sessions: ${report.agentState.sessionCount}`,
+    `- Directly resumable by ID: ${report.agentState.directlyResumable}`,
     `- Credential exclusions: ${report.totals.secretExclusions}`,
     `- Overall readiness: ${report.readiness}`,
     '',
     '> SECRET-BEARING: Treat this capsule and its store as confidential.',
     '',
     'Claude Code sessions, memory, subagents, plans, skills, commands, plugins, and related restorable state are included.',
+    '',
+    '## Captured Claude Code sessions',
+    '',
+    ...sessionRows,
+    '',
+    'After restore, start Claude Code from the restored repository with the receipt’s `CLAUDE_CONFIG_DIR`, then run `claude --resume` or a listed `claude --resume <session-id>` command.',
     '',
   ].join('\n');
 }
@@ -226,15 +247,53 @@ function escapeHtml(value) {
 
 function captureHtml(report) {
   const warnings = report.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join('');
+  const sessionRows = report.sessions.length === 0
+    ? '<tr><td colspan="6">No resumable Claude Code sessions were captured.</td></tr>'
+    : report.sessions.map((session) => `<tr><td><code>${escapeHtml(session.sessionId)}</code></td><td>${escapeHtml(session.title)}</td><td>${escapeHtml(session.updatedAt ?? '')}</td><td>${session.messageCount}</td><td>${escapeHtml(session.gitBranches.join(', '))}</td><td><code>${escapeHtml(session.resumeCommand)}</code></td></tr>`).join('');
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Claude Replicant Capture Report</title><style>
-body{font:16px/1.5 system-ui,sans-serif;max-width:860px;margin:3rem auto;padding:0 1.25rem;color:#17202a}h1{margin-bottom:.25rem}.card{border:1px solid #d9dee5;border-radius:12px;padding:1rem 1.25rem;margin:1rem 0}dt{font-weight:700}dd{margin:0 0 .6rem}code{overflow-wrap:anywhere}.warning{background:#fff8df;border-color:#e8c55d}
+body{font:16px/1.5 system-ui,sans-serif;max-width:1100px;margin:3rem auto;padding:0 1.25rem;color:#17202a}h1{margin-bottom:.25rem}.card{border:1px solid #d9dee5;border-radius:12px;padding:1rem 1.25rem;margin:1rem 0}dt{font-weight:700}dd{margin:0 0 .6rem}code{overflow-wrap:anywhere}table{width:100%;border-collapse:collapse}th,td{text-align:left;vertical-align:top;border-bottom:1px solid #d9dee5;padding:.55rem}.warning{background:#fff8df;border-color:#e8c55d}
 </style></head><body><h1>Claude Replicant Capture Report</h1><p>Self-contained migration capsule</p>
 <section class="card"><dl><dt>Capsule</dt><dd><code>${escapeHtml(report.packageId)}</code></dd><dt>Project</dt><dd>${escapeHtml(report.sourceLabel)}</dd><dt>Captured</dt><dd>${escapeHtml(report.createdAt)}</dd><dt>Readiness</dt><dd>${escapeHtml(report.readiness)}</dd></dl></section>
-<section class="card"><h2>Contents</h2><ul><li>${report.repository.entries} repository entries (${report.repository.bytes} bytes)</li><li>${report.agentState.entries} Claude state entries (${report.agentState.bytes} bytes)</li><li>${report.agentState.sessions} Claude sessions</li></ul></section>
+<section class="card"><h2>Contents</h2><ul><li>${report.repository.entries} repository entries (${report.repository.bytes} bytes)</li><li>${report.agentState.entries} Claude state entries (${report.agentState.bytes} bytes)</li><li>${report.agentState.sessionCount} Claude sessions (${report.agentState.directlyResumable} directly resumable by ID)</li></ul></section>
+<section class="card"><h2>Captured Claude Code sessions</h2><table><thead><tr><th>Session ID</th><th>Title / first prompt</th><th>Updated</th><th>Messages</th><th>Branch</th><th>Resume</th></tr></thead><tbody>${sessionRows}</tbody></table><p>After restore, launch Claude Code from the restored repository with the receipt’s <code>CLAUDE_CONFIG_DIR</code>, then use <code>claude --resume</code> or a listed session ID.</p></section>
 <section class="card warning"><h2>Handling</h2><ul>${warnings}</ul></section>
 <p>This static report contains no scripts or remote resources. See <code>manifest.json</code> and <code>inventory.jsonl</code> for authoritative evidence.</p></body></html>\n`;
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
+}
+
+function restoreMarkdown(receipt) {
+  return [
+    '# Claude Replicant Restore Report',
+    '',
+    `- Capsule: ${receipt.capsuleId}`,
+    `- Repository: ${receipt.destination}`,
+    `- Claude home: ${receipt.claudeDestination}`,
+    `- Native resume readiness: ${receipt.nativeResumeReadiness.valid ? 'verified' : 'failed'}`,
+    `- Restored sessions: ${receipt.resume.sessions.length}`,
+    '',
+    '## Resume in Claude Code',
+    '',
+    '```sh',
+    `cd ${shellQuote(receipt.destination)}`,
+    `CLAUDE_CONFIG_DIR=${shellQuote(receipt.claudeDestination)} claude --resume`,
+    '```',
+    '',
+    '| Session ID | Title / first prompt | Direct resume command |',
+    '|---|---|---|',
+    ...receipt.resume.sessions.map((session) =>
+      `| \`${session.sessionId}\` | ${String(session.title ?? '').replaceAll('|', '\\|')} | \`CLAUDE_CONFIG_DIR=${shellQuote(receipt.claudeDestination)} ${session.command}\` |`),
+    '',
+  ].join('\n');
+}
+
+function restoreHtml(receipt) {
+  const rows = receipt.resume.sessions.map((session) => `<tr><td><code>${escapeHtml(session.sessionId)}</code></td><td>${escapeHtml(session.title)}</td><td><code>CLAUDE_CONFIG_DIR=${escapeHtml(shellQuote(receipt.claudeDestination))} ${escapeHtml(session.command)}</code></td></tr>`).join('');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Claude Replicant Restore Report</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:1000px;margin:3rem auto;padding:0 1.25rem;color:#17202a}section{border:1px solid #d9dee5;border-radius:12px;padding:1rem 1.25rem;margin:1rem 0}table{width:100%;border-collapse:collapse}th,td{text-align:left;vertical-align:top;border-bottom:1px solid #d9dee5;padding:.55rem}code{overflow-wrap:anywhere}.ok{color:#176b35;font-weight:700}</style></head><body><h1>Claude Replicant Restore Report</h1><section><p class="ok">Native resume layout verified</p><dl><dt>Repository</dt><dd><code>${escapeHtml(receipt.destination)}</code></dd><dt>Claude home</dt><dd><code>${escapeHtml(receipt.claudeDestination)}</code></dd></dl><p>Run from the restored repository:</p><pre><code>CLAUDE_CONFIG_DIR=${escapeHtml(shellQuote(receipt.claudeDestination))} claude --resume</code></pre></section><section><h2>Restored sessions</h2><table><thead><tr><th>Session ID</th><th>Title / first prompt</th><th>Direct resume</th></tr></thead><tbody>${rows}</tbody></table></section></body></html>\n`;
 }
 
 function filterStatusForPolicyExclusions(snapshot, excludedPaths) {
@@ -397,6 +456,11 @@ export async function captureRepository({
     if (agentCaptured.totals.unstableEntries > 0) {
       throw new Error('Claude Code state changed incompatibly during capture; quiesce Claude Code and retry.');
     }
+    const sessionCatalog = await buildClaudeSessionCatalog({
+      capsuleRoot: staging,
+      agentCapture: agentCaptured,
+      sourceProjectPath: source,
+    });
     const gitAfter = await captureGitSnapshot(source, git);
     const gitStable = gitBefore.snapshotDigest === gitAfter.snapshotDigest;
     const excludedPaths = captured.inventory
@@ -428,8 +492,10 @@ export async function captureRepository({
       repository: captured.totals,
       agentState: {
         ...agentCaptured.totals,
-        sessions: agentCaptured.source.sessionIds.length,
+        sessionCount: sessionCatalog.total,
+        directlyResumable: sessionCatalog.directlyResumable,
       },
+      sessions: sessionCatalog.sessions,
       readiness: readiness.overall,
       agentEnvironmentStatus: agentEnvironment.collectionStatus,
       warnings: readiness.warnings,
@@ -454,6 +520,7 @@ export async function captureRepository({
     await writeJson(path.join(staging, 'capture-report.json'), report);
     await writeTextAtomic(path.join(staging, 'capture-report.md'), captureMarkdown(report));
     await writeTextAtomic(path.join(staging, 'capture-report.html'), captureHtml(report));
+    await writeJson(path.join(staging, 'sessions.json'), sessionCatalog);
     await writeJson(path.join(staging, 'agent-environment-profile.json'), agentEnvironment);
     await writeJson(path.join(staging, 'redaction-report.json'), redaction);
     await writeJson(path.join(staging, 'restore-readiness.json'), readiness);
@@ -470,7 +537,8 @@ export async function captureRepository({
       createdAt: report.createdAt,
       source: {
         label: path.basename(source),
-        absolutePathStored: false,
+        absolutePathStored: true,
+        originalPath: source,
         projectRootAlias: '$PROJECT_ROOT',
       },
       runtime: {
@@ -502,6 +570,11 @@ export async function captureRepository({
       agentState: {
         ...agentCaptured.source,
         entries: agentCaptured.entries,
+        sessionCatalog: {
+          report: 'sessions.json',
+          total: sessionCatalog.total,
+          directlyResumable: sessionCatalog.directlyResumable,
+        },
         reconstruction: 'isolated-claude-config-dir-with-project-path-remap',
       },
       findings: [...captured.findings, ...agentCaptured.findings],
@@ -639,6 +712,12 @@ async function destinationProbe(destination) {
   return probeFilesystem(parent);
 }
 
+async function resolveNewDestination(destinationInput, label) {
+  const requested = path.resolve(destinationInput);
+  const parent = await resolveExistingDirectory(path.dirname(requested), `${label} parent`);
+  return path.join(parent, path.basename(requested));
+}
+
 export async function createRestorePlan({
   capsule: capsuleInput,
   destination: destinationInput,
@@ -647,8 +726,11 @@ export async function createRestorePlan({
   assertNodeVersion();
   if (!capsuleInput || !destinationInput) throw new Error('Plan requires --capsule and --destination.');
   const capsule = await resolveExistingDirectory(path.resolve(capsuleInput), 'Capsule');
-  const destination = path.resolve(destinationInput);
-  const claudeDestination = path.resolve(claudeDestinationInput ?? `${destination}.claude-home`);
+  const destination = await resolveNewDestination(destinationInput, 'Destination');
+  const claudeDestination = await resolveNewDestination(
+    claudeDestinationInput ?? `${destination}.claude-home`,
+    'Claude destination',
+  );
   if (pathsOverlap(capsule, destination)) throw new Error('Capsule and restore destination must not overlap.');
   if (pathsOverlap(capsule, claudeDestination)) throw new Error('Capsule and Claude restore destination must not overlap.');
   if (pathsOverlap(destination, claudeDestination)) {
@@ -689,6 +771,7 @@ export async function createRestorePlan({
   })));
   const mappedAgentEntries = (manifest.agentState?.entries ?? []).map((entry) => ({
     ...entry,
+    sourceLogicalPath: entry.logicalPath,
     logicalPath: restoredClaudeLogicalPath(
       entry.logicalPath,
       manifest.agentState.projectKey,
@@ -862,6 +945,18 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
     requested: receiptInput,
     filename: `${plan.planId}.receipt.json`,
   });
+  if (!receiptPath.endsWith('.json')) throw new Error('Restore receipt filename must end with .json.');
+  const receiptBase = receiptPath.endsWith('.json') ? receiptPath.slice(0, -'.json'.length) : receiptPath;
+  const receiptMarkdownPath = await resolveCapsuleOperationPath({
+    capsule: planCapsule,
+    requested: `${receiptBase}.md`,
+    filename: `${plan.planId}.receipt.md`,
+  });
+  const receiptHtmlPath = await resolveCapsuleOperationPath({
+    capsule: planCapsule,
+    requested: `${receiptBase}.html`,
+    filename: `${plan.planId}.receipt.html`,
+  });
   if (pathsOverlap(receiptPath, plan.destination)) {
     throw new Error('Receipt path must be outside the restored repository.');
   }
@@ -869,6 +964,7 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
     throw new Error('Receipt path must be outside the restored Claude home.');
   }
   const manifest = await readJson(path.join(planCapsule, 'manifest.json'));
+  const sessionCatalog = await readJson(path.join(planCapsule, 'sessions.json'));
   const git = await probeGit(plan.git?.path ?? manifest.git.prerequisite.path);
   const parent = path.dirname(plan.destination);
   const claudeParent = path.dirname(plan.claudeDestination);
@@ -911,6 +1007,7 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
   const startedAt = isoNow();
   const mappedAgentEntries = manifest.agentState.entries.map((entry) => ({
     ...entry,
+    sourceLogicalPath: entry.logicalPath,
     logicalPath: restoredClaudeLogicalPath(entry.logicalPath, manifest.agentState.projectKey, plan.destination),
   }));
 
@@ -928,9 +1025,29 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
     if (!gitVerification.valid) {
       throw new Error(`Restored Git verification failed: ${JSON.stringify(gitVerification.mismatches)}`);
     }
-    const agentVerification = await verifyTree(claudeStaging, mappedAgentEntries);
+    const agentSourceVerification = await verifyTree(claudeStaging, mappedAgentEntries);
+    if (!agentSourceVerification.valid) {
+      throw new Error(`Captured Claude state verification failed: ${JSON.stringify(agentSourceVerification.errors)}`);
+    }
+    const pathRemap = await remapRestoredClaudeState({
+      claudeRoot: claudeStaging,
+      entries: mappedAgentEntries,
+      oldProjectKey: manifest.agentState.projectKey,
+      sourceProjectPath: manifest.agentState.sourceProjectPath,
+      destinationProjectPath: plan.destination,
+      variances,
+    });
+    const agentVerification = await verifyTree(claudeStaging, pathRemap.runtimeEntries);
     if (!agentVerification.valid) {
-      throw new Error(`Restored Claude state verification failed: ${JSON.stringify(agentVerification.errors)}`);
+      throw new Error(`Path-remapped Claude state verification failed: ${JSON.stringify(agentVerification.errors)}`);
+    }
+    const nativeResumeReadiness = await verifyRestoredClaudeSessions({
+      claudeRoot: claudeStaging,
+      destinationProjectPath: plan.destination,
+      sessions: sessionCatalog.sessions,
+    });
+    if (!nativeResumeReadiness.valid) {
+      throw new Error(`Restored sessions do not satisfy Claude Code resume layout: ${JSON.stringify(nativeResumeReadiness.sessions)}`);
     }
     if (await pathExists(plan.destination) || await pathExists(plan.claudeDestination)) {
       throw new Error('A restore destination appeared during restore; refusing finalization.');
@@ -944,7 +1061,7 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
     }
     const postRenameTree = await verifyTree(plan.destination, manifest.entries);
     const postRenameGit = await verifyGitAfterRestore({ destination: plan.destination, manifest, git });
-    const postRenameAgent = await verifyTree(plan.claudeDestination, mappedAgentEntries);
+    const postRenameAgent = await verifyTree(plan.claudeDestination, pathRemap.runtimeEntries);
     if (!postRenameTree.valid || !postRenameGit.valid || !postRenameAgent.valid) {
       throw new Error('Post-rename verification failed; restored destination retained for diagnosis.');
     }
@@ -965,12 +1082,38 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
       treeVerification: postRenameTree,
       gitVerification: postRenameGit,
       agentStateVerification: postRenameAgent,
+      capturedAgentStateVerification: agentSourceVerification,
+      pathRemap: {
+        sourceProjectPath: pathRemap.sourceProjectPath,
+        destinationProjectPath: pathRemap.destinationProjectPath,
+        sourceProjectKey: pathRemap.oldProjectKey,
+        destinationProjectKey: pathRemap.destinationProjectKey,
+        remappedFiles: pathRemap.remapped,
+      },
+      nativeResumeReadiness,
+      resume: {
+        workingDirectory: plan.destination,
+        environment: { CLAUDE_CONFIG_DIR: plan.claudeDestination },
+        pickerCommand: 'claude --resume',
+        sessions: sessionCatalog.sessions.map((session) => ({
+          sessionId: session.sessionId,
+          title: session.title,
+          command: session.resumeCommand,
+        })),
+      },
       declaredVariances: variances,
       limitations: [
         'Dedicated credential stores, dependencies, xattrs, ACLs, BSD flags, ownership, and birthtime were not restored.',
       ],
+      reports: {
+        json: receiptPath,
+        markdown: receiptMarkdownPath,
+        html: receiptHtmlPath,
+      },
     };
     await writeJsonAtomic(receiptPath, receipt);
+    await writeTextAtomic(receiptMarkdownPath, restoreMarkdown(receipt));
+    await writeTextAtomic(receiptHtmlPath, restoreHtml(receipt));
     await releaseRestoreLock();
     return { ...receipt, receiptPath };
   } catch (error) {

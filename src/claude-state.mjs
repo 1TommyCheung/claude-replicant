@@ -1,24 +1,30 @@
-import { open, readdir } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { open, readFile, readdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { captureTree, secretPathReason, walkTree } from './filesystem.mjs';
-import { pathExists, resolveExistingDirectory } from './util.mjs';
+import readline from 'node:readline';
+import { applyFileMetadata, captureTree, secretPathReason, walkTree } from './filesystem.mjs';
+import { pathExists, resolveExistingDirectory, safeJoin, sha256File } from './util.mjs';
 
 const GLOBAL_DIRECTORIES = new Set([
   'agents',
   'commands',
+  'backups',
+  'debug',
   'hooks',
+  'image-cache',
   'memory',
   'output-styles',
+  'paste-cache',
   'plans',
   'plugins',
+  'shell-snapshots',
   'skills',
 ]);
 
 const SESSION_DIRECTORIES = new Set([
   'file-history',
   'session-env',
-  'shell-snapshots',
   'tasks',
   'todos',
 ]);
@@ -205,9 +211,10 @@ export async function captureClaudeState({
     },
     source: {
       adapter: 'claude-code',
-      adapterVersion: '1.0.0',
+      adapterVersion: '1.1.0',
       rootAlias: '$CLAUDE_CONFIG_DIR',
-      absolutePathStored: false,
+      absolutePathStored: true,
+      sourceProjectPath: source,
       projectKey: preview.projectKey,
       discoveryMethod: preview.discoveryMethod,
       sessionIds: preview.sessionIds,
@@ -221,4 +228,258 @@ export function restoredClaudeLogicalPath(logicalPath, oldProjectKey, destinatio
     return `projects/${encodeProjectPath(destinationProject)}${logicalPath.slice(projectPrefix.length)}`;
   }
   return logicalPath;
+}
+
+function messageText(message) {
+  const content = message?.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return null;
+  const text = content
+    .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+    .map((block) => block.text)
+    .join(' ');
+  return text || null;
+}
+
+function compactText(value, limit = 240) {
+  if (typeof value !== 'string') return null;
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (!compact) return null;
+  return compact.length > limit ? `${compact.slice(0, limit - 1)}…` : compact;
+}
+
+async function inspectSessionFile(filePath, entry, sessionId, sourceProjectPath, relatedEntries) {
+  const timestamps = [];
+  const models = new Set();
+  const branches = new Set();
+  const recordedCwds = new Set();
+  const claudeVersions = new Set();
+  const entrypoints = new Set();
+  let validRecords = 0;
+  let malformedRecords = 0;
+  let userMessages = 0;
+  let assistantMessages = 0;
+  let firstPrompt = null;
+  let summary = null;
+  let customTitle = null;
+  let observedSessionId = null;
+
+  const lines = readline.createInterface({ input: createReadStream(filePath), crlfDelay: Infinity });
+  for await (const line of lines) {
+    if (!line.trim()) continue;
+    let record;
+    try {
+      record = JSON.parse(line);
+      validRecords += 1;
+    } catch {
+      malformedRecords += 1;
+      continue;
+    }
+    if (typeof record.sessionId === 'string') observedSessionId = record.sessionId;
+    if (typeof record.timestamp === 'string' && Number.isFinite(Date.parse(record.timestamp))) {
+      timestamps.push(record.timestamp);
+    }
+    if (typeof record.cwd === 'string') recordedCwds.add(record.cwd);
+    if (typeof record.gitBranch === 'string' && record.gitBranch) branches.add(record.gitBranch);
+    if (typeof record.version === 'string' && record.version) claudeVersions.add(record.version);
+    if (typeof record.entrypoint === 'string' && record.entrypoint) entrypoints.add(record.entrypoint);
+    if (typeof record.message?.model === 'string') models.add(record.message.model);
+    if (record.type === 'user' && record.message?.role === 'user') {
+      userMessages += 1;
+      if (!firstPrompt) firstPrompt = compactText(messageText(record.message));
+    }
+    if (record.type === 'assistant' && record.message?.role === 'assistant') assistantMessages += 1;
+    if (record.type === 'summary') summary = compactText(record.summary) ?? summary;
+    if (record.type === 'custom-title') {
+      customTitle = compactText(record.customTitle ?? record.title) ?? customTitle;
+    }
+  }
+
+  timestamps.sort();
+  const sessionPrefix = `${entry.logicalPath.slice(0, -'.jsonl'.length)}/`;
+  const subagentTranscripts = relatedEntries.filter((candidate) =>
+    candidate.kind === 'file' &&
+    candidate.logicalPath.startsWith(`${sessionPrefix}subagents/`) &&
+    candidate.logicalPath.endsWith('.jsonl')).length;
+  const toolResultFiles = relatedEntries.filter((candidate) =>
+    candidate.kind === 'file' && candidate.logicalPath.startsWith(`${sessionPrefix}tool-results/`)).length;
+  const sourceCwdObserved = [...recordedCwds].some((cwd) => equivalentMacPaths(sourceProjectPath).includes(cwd));
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId);
+  return {
+    sessionId,
+    title: customTitle ?? summary ?? firstPrompt ?? sessionId,
+    customTitle,
+    summary,
+    firstPrompt,
+    createdAt: timestamps[0] ?? null,
+    updatedAt: timestamps.at(-1) ?? new Date(Number(BigInt(entry.metadata.mtimeNs) / 1_000_000n)).toISOString(),
+    messageCount: userMessages + assistantMessages,
+    userMessages,
+    assistantMessages,
+    models: [...models].sort(),
+    gitBranches: [...branches].sort(),
+    claudeVersions: [...claudeVersions].sort(),
+    entrypoints: [...entrypoints].sort(),
+    recordedCwds: [...recordedCwds].sort(),
+    transcriptPath: entry.logicalPath,
+    capturedBytes: entry.capturedLength,
+    subagentTranscripts,
+    toolResultFiles,
+    validRecords,
+    malformedRecords,
+    observedSessionId,
+    resumeById: uuid && validRecords > 0 && observedSessionId === sessionId && sourceCwdObserved,
+    destinationPathRemapRequired: sourceCwdObserved,
+    resumeCommand: `claude --resume ${sessionId}`,
+  };
+}
+
+export async function buildClaudeSessionCatalog({ capsuleRoot, agentCapture, sourceProjectPath }) {
+  const prefix = `projects/${agentCapture.source.projectKey}/`;
+  const sessionEntries = agentCapture.entries.filter((entry) => {
+    if (entry.kind !== 'file' || !entry.logicalPath.startsWith(prefix) || !entry.logicalPath.endsWith('.jsonl')) {
+      return false;
+    }
+    return !entry.logicalPath.slice(prefix.length).includes('/');
+  });
+  const sessions = [];
+  for (const entry of sessionEntries) {
+    const sessionId = path.posix.basename(entry.logicalPath, '.jsonl');
+    sessions.push(await inspectSessionFile(
+      safeJoin(capsuleRoot, entry.payloadPath),
+      entry,
+      sessionId,
+      sourceProjectPath,
+      agentCapture.entries,
+    ));
+  }
+  sessions.sort((first, second) =>
+    String(second.updatedAt ?? '').localeCompare(String(first.updatedAt ?? '')) ||
+    first.sessionId.localeCompare(second.sessionId));
+  return {
+    schemaVersion: '1.0.0',
+    sourceAdapter: 'claude-code',
+    projectKey: agentCapture.source.projectKey,
+    sourceProjectPath,
+    total: sessions.length,
+    directlyResumable: sessions.filter((session) => session.resumeById).length,
+    sessions,
+  };
+}
+
+function pathBoundClaudeFile(sourceLogicalPath, oldProjectKey) {
+  return sourceLogicalPath === '.claude.json' ||
+    sourceLogicalPath === 'history.jsonl' ||
+    sourceLogicalPath.startsWith(`projects/${oldProjectKey}/`) ||
+    ['session-env/', 'tasks/', 'todos/', 'plans/'].some((prefix) => sourceLogicalPath.startsWith(prefix));
+}
+
+export async function remapRestoredClaudeState({
+  claudeRoot,
+  entries,
+  oldProjectKey,
+  sourceProjectPath,
+  destinationProjectPath,
+  variances,
+}) {
+  const destinationKey = encodeProjectPath(destinationProjectPath);
+  const replacements = [
+    ...equivalentMacPaths(sourceProjectPath).map((sourcePath) => [sourcePath, destinationProjectPath]),
+    [oldProjectKey, destinationKey],
+  ].filter(([from, to]) => from && from !== to)
+    .sort(([first], [second]) => second.length - first.length);
+  const remapped = [];
+  const runtimeEntries = [];
+  for (const entry of entries) {
+    if (entry.kind !== 'file' || !pathBoundClaudeFile(entry.sourceLogicalPath ?? entry.logicalPath, oldProjectKey)) {
+      runtimeEntries.push(entry);
+      continue;
+    }
+    const target = safeJoin(claudeRoot, entry.logicalPath);
+    const original = await readFile(target);
+    if (original.includes(0)) {
+      runtimeEntries.push(entry);
+      continue;
+    }
+    let text = original.toString('utf8');
+    let replacementCount = 0;
+    for (const [from, to] of replacements) {
+      const occurrences = text.split(from).length - 1;
+      if (occurrences > 0) {
+        text = text.replaceAll(from, to);
+        replacementCount += occurrences;
+      }
+    }
+    if (replacementCount === 0) {
+      runtimeEntries.push(entry);
+      continue;
+    }
+    await writeFile(target, text, { mode: entry.metadata?.mode ?? 0o600 });
+    await applyFileMetadata(target, entry, variances);
+    const runtimeEntry = {
+      ...entry,
+      sha256: await sha256File(target),
+      restoredSize: Buffer.byteLength(text),
+      pathRemapped: true,
+    };
+    runtimeEntries.push(runtimeEntry);
+    remapped.push({
+      path: entry.logicalPath,
+      replacements: replacementCount,
+      sourceSha256: entry.sha256,
+      restoredSha256: runtimeEntry.sha256,
+    });
+  }
+  return {
+    runtimeEntries,
+    remapped,
+    sourceProjectPath,
+    destinationProjectPath,
+    oldProjectKey,
+    destinationProjectKey: destinationKey,
+  };
+}
+
+export async function verifyRestoredClaudeSessions({ claudeRoot, destinationProjectPath, sessions }) {
+  const projectKey = encodeProjectPath(destinationProjectPath);
+  const results = [];
+  for (const session of sessions) {
+    const transcript = path.join(claudeRoot, 'projects', projectKey, `${session.sessionId}.jsonl`);
+    let records = 0;
+    let matchingSessionRecords = 0;
+    let matchingCwdRecords = 0;
+    let malformedRecords = 0;
+    if (await pathExists(transcript)) {
+      const lines = readline.createInterface({ input: createReadStream(transcript), crlfDelay: Infinity });
+      for await (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const record = JSON.parse(line);
+          records += 1;
+          if (record.sessionId === session.sessionId) matchingSessionRecords += 1;
+          if (record.cwd === destinationProjectPath) matchingCwdRecords += 1;
+        } catch {
+          malformedRecords += 1;
+        }
+      }
+    }
+    const valid = records > 0 && matchingSessionRecords > 0 && matchingCwdRecords > 0;
+    results.push({
+      sessionId: session.sessionId,
+      valid,
+      transcript: `projects/${projectKey}/${session.sessionId}.jsonl`,
+      records,
+      matchingSessionRecords,
+      matchingCwdRecords,
+      malformedRecords,
+      resumeCommand: `claude --resume ${session.sessionId}`,
+    });
+  }
+  return {
+    valid: results.every((result) => result.valid),
+    projectKey,
+    destinationProjectPath,
+    sessionCount: results.length,
+    sessions: results,
+  };
 }

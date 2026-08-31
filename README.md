@@ -2,7 +2,7 @@
 
 Portable, integrity-checked migration capsules for Claude Code projects and other coding agents.
 
-> **Status:** Part 1 is ready. It captures, validates, and restores both the repository and locally available Claude Code memory/session/agent state. Part 2—analysis and gold-standard cross-agent context—is planned for later.
+> **Status:** Part 1 is ready. It captures, validates, and restores the repository and locally available Claude Code state, including path-remapped native session resume on another computer. Part 2—analysis and gold-standard cross-agent context—is planned for later.
 
 ## Overview
 
@@ -21,16 +21,21 @@ Each capture is finalized as:
         │   └── claude-home/
         ├── operations/
         │   ├── <restore-plan>.json
-        │   └── <restore-receipt>.json
+        │   ├── <restore-receipt>.json
+        │   ├── <restore-receipt>.md
+        │   └── <restore-receipt>.html
         ├── capture-report.json
         ├── capture-report.md
         ├── capture-report.html
+        ├── sessions.json
         ├── redaction-report.json
         ├── restore-readiness.json
         └── validation.json
 ```
 
 Every `<capsule-id>/` directory is the complete unit: payloads, reports, validation, restore plans, and restore receipts all stay inside it. Capture creates no `store.json`, catalog, derivatives, receipts, or other files alongside the capsule. You can transfer or zip one capsule by itself, or group several complete capsule directories into one archive.
+
+All captured sessions are enumerated in `sessions.json`, `capture-report.json`, `capture-report.md`, and `capture-report.html`. Each record includes its session ID, title or first prompt, timestamps, message counts, branch, models, Claude version, related subagent/tool-result counts, and direct resume command.
 
 ## What we are trying to achieve
 
@@ -66,10 +71,13 @@ Part 1 is the tested migration foundation. It currently supports:
 - a versioned dry-run restore plan;
 - explicit approval before restoring to a new, nonexistent destination;
 - remapping of Claude Code’s path-derived project key to the restored repository path;
+- remapping of path-bound `cwd` and project references inside the restored Claude state while retaining the original bytes in the canonical capsule;
 - isolated Claude-home restoration and activation through `CLAUDE_CONFIG_DIR`;
+- native-resume verification for every restored session before restore is declared successful;
+- JSON, Markdown, and HTML restore reports listing every restored session and its resume command;
 - post-restore repository, Git, and Claude-state verification with a restore receipt.
 
-Part 1 does **not** capture dedicated credential stores, hidden/provider-side state, external accounts, model internals, or Codex-native task state. It does not yet perform semantic analysis. Locally available Claude Code state is captured as files and restored into a complete isolated Claude configuration directory.
+Part 1 does **not** guarantee that authentication tokens, external accounts, hidden/provider-side state, or model internals can move between computers. Reauthenticate Claude Code on the destination when required. Locally saved sessions and agent state are restored into a complete isolated Claude configuration directory and verified against Claude Code’s documented project-key/session-ID/`cwd` resume contract.
 
 ## Requirements
 
@@ -178,6 +186,21 @@ The restore receipt reports the activation value. Start Claude Code against the 
 cd /path/to/new-repository
 CLAUDE_CONFIG_DIR=/path/to/new-claude-home claude
 ```
+
+Open the normal session picker:
+
+```sh
+cd /path/to/new-repository
+CLAUDE_CONFIG_DIR=/path/to/new-claude-home claude --resume
+```
+
+Or resume any reported session directly:
+
+```sh
+CLAUDE_CONFIG_DIR=/path/to/new-claude-home claude --resume <session-id>
+```
+
+Interactive Claude Code sessions appear in the picker. Sessions originally created through `claude -p` or the Agent SDK may not appear in the picker, but remain directly resumable by their reported session ID.
 
 When `--claude-home` is omitted, capture uses `CLAUDE_CONFIG_DIR` and then `~/.claude`. When `--claude-destination` is omitted, planning uses `<new-repository>.claude-home`. Plan and receipt output paths outside the capsule are rejected.
 

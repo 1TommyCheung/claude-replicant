@@ -22,7 +22,19 @@
     "packageType": { "const": "forensic-backup" },
     "agentState": {
       "type": "object",
-      "required": ["adapter", "rootAlias", "projectKey", "sessionIds", "entries", "reconstruction"]
+      "required": ["adapter", "rootAlias", "projectKey", "sessionIds", "sessionCatalog", "entries", "reconstruction"],
+      "properties": {
+        "sessionCatalog": {
+          "type": "object",
+          "required": ["report", "total", "directlyResumable"],
+          "properties": {
+            "report": { "const": "sessions.json" },
+            "total": { "type": "integer", "minimum": 0 },
+            "directlyResumable": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": true
+        }
+      }
     },
     "manifestDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
   },
