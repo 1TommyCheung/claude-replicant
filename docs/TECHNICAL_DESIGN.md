@@ -1,6 +1,6 @@
 # Claude Replicant: Technical Design
 
-Specification version: 0.4.1
+Specification version: 0.4.2
 
 Status: Part 1 implemented; Part 2 analysis and gold-standard cross-agent work remains planned
 
@@ -551,6 +551,7 @@ Schemas use semantic versions. Readers reject unsupported major versions, tolera
 - The Node.js CLI captures repository and Claude state into one independently movable capsule, validates hashes, plans restore, and restores only to new isolated destinations after explicit approval.
 - Capture produces JSON/Markdown/HTML reports and `sessions.json`; restore produces JSON/Markdown/HTML receipts inside the same capsule.
 - The adapter captures all locally stored sessions in the selected Claude project directory and relevant local memory, agent, plugin, plan, task, history, settings, and cache state while excluding dedicated credential stores.
+- In the standard `~/.claude` layout, home-level `~/.claude.json` is the authoritative adjacent global configuration. If a shadow `.claude/.claude.json` also exists, the adapter must not map both files to the same logical path. A custom `CLAUDE_CONFIG_DIR` uses its own root-level `.claude.json` and does not import an unrelated adjacent file.
 - Restore preserves canonical bytes, remaps only restored path-bound state, verifies every remapped file, and requires every cataloged session to satisfy the native-resume layout contract.
 
 ### Part 1C — portability hardening (ongoing)

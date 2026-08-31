@@ -2,6 +2,27 @@
 
 This log records how Claude Replicant evolved, why major design choices were made, and what evidence supports the current implementation. The changelog is the concise user-facing release record; this document is the engineering narrative.
 
+## 2026-09-01 — v0.4.2 `.claude.json` collision fix
+
+### Failure
+
+A real capture of `webtrail` passed preview but failed staged validation with `duplicate-logical-path` and `payload-hash-mismatch` for `.claude.json`. The source repository was unchanged and no capsule was finalized.
+
+### Root cause
+
+The standard Claude layout contained both `~/.claude.json` and a shadow `~/.claude/.claude.json`. Generic root-file discovery selected the latter, while the adjacent-config collector selected the former. Both were assigned `.claude.json` as their logical and payload path. The second copy replaced the staged bytes, while the manifest retained both entries and their different hashes.
+
+### Fix
+
+- Recognize a `.claude` directory as the standard home layout.
+- When its documented adjacent `.claude.json` exists, remove the colliding root candidate before capture.
+- For a custom `CLAUDE_CONFIG_DIR`, do not infer or capture an unrelated parent-level `.claude.json`; retain the config directory's own root file.
+- Preserve validation's duplicate-path and hash checks unchanged so future collisions still fail safely.
+
+### Regression coverage
+
+The synthetic fixture now creates two `.claude.json` files with different bytes. Capture must finalize successfully, the manifest must contain exactly one `.claude.json` agent entry, and its payload must match the authoritative adjacent file.
+
 ## 2026-09-01 — v0.4.1 documentation baseline
 
 ### Goal

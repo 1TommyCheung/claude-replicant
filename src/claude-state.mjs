@@ -138,7 +138,7 @@ export async function previewClaudeState({ source, claudeHome: claudeHomeInput }
     })),
     project.key,
   );
-  const candidates = await walkTree(claudeHome, {
+  let candidates = await walkTree(claudeHome, {
     include: (candidate, dirent) => selectedClaudePath(
       candidate.logicalPath,
       project.key,
@@ -147,10 +147,18 @@ export async function previewClaudeState({ source, claudeHome: claudeHomeInput }
     ),
     descend: (candidate) => shouldDescendClaudePath(candidate.logicalPath, project.key, sessionIds),
   });
+  const standardClaudeHome = await resolveExistingDirectory(
+    path.join(os.homedir(), '.claude'),
+    'Default Claude home',
+  ).catch(() => null);
+  const standardHomeLayout = claudeHome === standardClaudeHome;
   const adjacentConfigPath = path.join(path.dirname(claudeHome), '.claude.json');
-  const adjacentCandidates = await pathExists(adjacentConfigPath)
+  const adjacentCandidates = standardHomeLayout && await pathExists(adjacentConfigPath)
     ? [{ logicalPath: '.claude.json', absolutePath: adjacentConfigPath }]
     : [];
+  if (adjacentCandidates.length > 0) {
+    candidates = candidates.filter((candidate) => candidate.logicalPath !== '.claude.json');
+  }
   return {
     claudeHome,
     projectKey: project.key,
@@ -211,7 +219,7 @@ export async function captureClaudeState({
     },
     source: {
       adapter: 'claude-code',
-      adapterVersion: '1.1.0',
+      adapterVersion: '1.1.1',
       rootAlias: '$CLAUDE_CONFIG_DIR',
       absolutePathStored: true,
       sourceProjectPath: source,

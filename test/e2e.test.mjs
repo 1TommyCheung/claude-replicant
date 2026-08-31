@@ -27,6 +27,7 @@ import {
   restoreFromPlan,
   validateCapsule,
 } from '../src/core.mjs';
+import { previewClaudeState } from '../src/claude-state.mjs';
 import { readJson, writeJsonAtomic } from '../src/util.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -123,7 +124,7 @@ async function createFixture(root) {
   await chmod(path.join(repository, '.git', 'hooks', 'post-checkout'), 0o700);
   await git(repository, ['config', 'core.fsmonitor', hostileHelper]);
 
-  const claudeHome = path.join(root, 'claude-home');
+  const claudeHome = path.join(root, '.claude');
   const projectKey = path.resolve(repository).replaceAll(path.sep, '-');
   const claudeProject = path.join(claudeHome, 'projects', projectKey);
   const sessionId = '11111111-2222-4333-8444-555555555555';
@@ -135,6 +136,7 @@ async function createFixture(root) {
   await mkdir(path.join(claudeHome, 'plans'), { recursive: true });
   await writeFile(path.join(claudeHome, 'CLAUDE.md'), 'Global Claude instructions.\n');
   await writeFile(path.join(claudeHome, 'settings.json'), '{"theme":"dark"}\n');
+  await writeFile(path.join(claudeHome, '.claude.json'), '{"shadowConfig":"must-not-win"}\n');
   await writeFile(path.join(claudeHome, '.credentials.json'), '{"token":"must-not-copy"}\n');
   await writeFile(path.join(root, '.claude.json'), '{"projects":{"fixture":{"mcpServers":{}}}}\n');
   await writeFile(path.join(claudeHome, 'agents', 'reviewer.md'), 'Review agent.\n');
@@ -180,7 +182,13 @@ async function createFixture(root) {
 
 test('Part 1 captures, validates, rejects corruption, plans, restores, and verifies', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'claude-replicant-e2e-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const originalHome = process.env.HOME;
+  process.env.HOME = root;
+  t.after(async () => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    await rm(root, { recursive: true, force: true });
+  });
   const { repository, claudeSession, claudeHome, sessionId, secondSessionId, executionMarker } = await createFixture(root);
   const store = path.join(root, 'capsule-store');
 
@@ -238,9 +246,15 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   assert.equal(manifest.readiness.domains.gitState.status, 'ready');
   assert.equal(manifest.readiness.domains.agentState.status, 'ready');
   assert.equal(manifest.policy.agentState, 'captured-with-execution-as-authorization');
+  assert.equal(manifest.agentState.adapterVersion, '1.1.1');
   assert.ok(manifest.agentState.entries.some((entry) => entry.logicalPath.endsWith(`${sessionId}.jsonl`)));
   assert.ok(manifest.agentState.entries.some((entry) => entry.logicalPath.endsWith('memory/MEMORY.md')));
   assert.ok(manifest.agentState.entries.some((entry) => entry.logicalPath === 'agents/reviewer.md'));
+  assert.equal(manifest.agentState.entries.filter((entry) => entry.logicalPath === '.claude.json').length, 1);
+  assert.equal(
+    await readFile(path.join(captured.capsulePath, 'payload', 'claude-home', '.claude.json'), 'utf8'),
+    '{"projects":{"fixture":{"mcpServers":{}}}}\n',
+  );
   assert.equal(await lstat(path.join(captured.capsulePath, 'capture-report.html')).then(() => true), true);
   await assert.rejects(lstat(path.join(captured.capsulePath, 'payload', 'claude-home', '.credentials.json')));
   const sessionsReport = await readJson(path.join(captured.capsulePath, 'sessions.json'));
@@ -365,5 +379,33 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
       receipt: path.join(movedCapsule, 'operations', 'second.json'),
     }),
     /Destination must not exist/,
+  );
+});
+
+test('a custom Claude config directory keeps its own .claude.json', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'claude-replicant-custom-home-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const repository = path.join(root, 'repository');
+  const claudeHome = path.join(root, 'custom-config');
+  const projectKey = repository.replaceAll(path.sep, '-');
+  await mkdir(repository, { recursive: true });
+  await mkdir(path.join(claudeHome, 'projects', projectKey), { recursive: true });
+  await writeFile(path.join(claudeHome, '.claude.json'), '{"custom":true}\n');
+  await writeFile(path.join(root, '.claude.json'), '{"unrelated":true}\n');
+  await writeFile(
+    path.join(claudeHome, 'projects', projectKey, '11111111-2222-4333-8444-555555555555.jsonl'),
+    `${JSON.stringify({
+      type: 'user',
+      cwd: repository,
+      sessionId: '11111111-2222-4333-8444-555555555555',
+      message: { role: 'user', content: 'custom config fixture' },
+    })}\n`,
+  );
+
+  const preview = await previewClaudeState({ source: repository, claudeHome });
+  assert.deepEqual(preview.adjacentCandidates, []);
+  assert.deepEqual(
+    preview.candidates.filter((candidate) => candidate.logicalPath === '.claude.json').map((candidate) => candidate.absolutePath),
+    [path.join(await realpath(claudeHome), '.claude.json')],
   );
 });

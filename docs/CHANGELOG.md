@@ -2,6 +2,19 @@
 
 All notable user-visible changes to Claude Replicant are recorded here. Versions follow semantic versioning for the plugin and CLI. Capsule schema versions are tracked independently inside generated artifacts and schema files.
 
+## 0.4.2 — 2026-09-01
+
+### Fixed
+
+- Fixed capture failure when both `~/.claude.json` and `~/.claude/.claude.json` exist.
+- The standard `~/.claude` layout now captures the documented adjacent `~/.claude.json` exactly once and ignores the colliding shadow path.
+- Custom Claude configuration directories continue to capture their own root-level `.claude.json` without importing an unrelated file from the parent directory.
+- Bumped the Claude Code filesystem adapter version to `1.1.1`.
+
+### Verified
+
+- Added a regression fixture with two different `.claude.json` files and asserted that the capsule contains one authoritative logical entry with the expected bytes.
+
 ## 0.4.1 — 2026-09-01
 
 ### Documentation

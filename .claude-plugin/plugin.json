@@ -1,6 +1,6 @@
 {
   "name": "claude-replicant",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Capture complete Claude Code projects and natively resume restored sessions.",
   "author": {
     "name": "1TommyCheung",

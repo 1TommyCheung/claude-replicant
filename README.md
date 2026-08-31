@@ -4,7 +4,7 @@ Portable, integrity-checked migration capsules for Claude Code projects and othe
 
 > **Status:** Part 1 is ready. It captures, validates, and restores the repository and locally available Claude Code state, including path-remapped native session resume on another computer. Part 2—analysis and gold-standard cross-agent context—is planned for later.
 
-Current release: **v0.4.1**. See the [changelog](docs/CHANGELOG.md) for release-level changes and the [development log](docs/DEVELOPMENT_LOG.md) for implementation decisions and verification history.
+Current release: **v0.4.2**. See the [changelog](docs/CHANGELOG.md) for release-level changes and the [development log](docs/DEVELOPMENT_LOG.md) for implementation decisions and verification history.
 
 ## Overview
 
