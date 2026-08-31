@@ -1,6 +1,6 @@
 {
   "name": "claude-replicant",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Capture and restore complete repository and Claude Code state capsules.",
   "author": {
     "name": "1TommyCheung",

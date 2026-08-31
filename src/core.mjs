@@ -6,7 +6,6 @@ import {
   lstat,
   mkdir,
   open,
-  readFile,
   readlink,
   rename,
   stat,
@@ -65,6 +64,22 @@ const REPORT_FILES = [
 ];
 
 const CAPSULE_FOLDER = 'capsule';
+
+export async function resolveCapsuleOperationPath({ capsule: capsuleInput, requested, filename }) {
+  const capsule = await resolveExistingDirectory(path.resolve(capsuleInput), 'Capsule');
+  const operations = path.join(capsule, 'operations');
+  const operationsStats = await lstat(operations).catch(() => null);
+  if (!operationsStats?.isDirectory() || operationsStats.isSymbolicLink()) {
+    throw new Error(`Capsule operations folder is missing or unsafe: ${operations}`);
+  }
+  const target = requested ? path.resolve(requested) : path.join(operations, filename);
+  const targetParent = await resolveExistingDirectory(path.dirname(target), 'Operational file parent');
+  if (targetParent !== operations) {
+    throw new Error(`Operational files must be stored directly inside the capsule operations folder: ${operations}`);
+  }
+  if (await pathExists(target)) throw new Error(`Operational file already exists: ${target}`);
+  return target;
+}
 
 function agentEnvironmentProfile(agentCapture) {
   return {
@@ -236,38 +251,9 @@ function filterStatusForPolicyExclusions(snapshot, excludedPaths) {
   };
 }
 
-async function initializeStore(store) {
+async function initializeCapsuleRoot(store) {
   await mkdir(store, { recursive: true, mode: 0o700 });
-  const storeFile = path.join(store, 'store.json');
-  if (await pathExists(storeFile)) {
-    const current = await readJson(storeFile);
-    if (current.schemaVersion !== FORMAT_VERSION) {
-      throw new Error(`Unsupported capsule store version ${current.schemaVersion}.`);
-    }
-  } else {
-    await writeJsonAtomic(storeFile, {
-      schemaVersion: FORMAT_VERSION,
-      storeId: newId('store'),
-      createdAt: isoNow(),
-    });
-  }
   await mkdir(path.join(store, CAPSULE_FOLDER), { recursive: true, mode: 0o700 });
-  await mkdir(path.join(store, 'derivatives'), { recursive: true, mode: 0o700 });
-  await mkdir(path.join(store, 'receipts'), { recursive: true, mode: 0o700 });
-}
-
-async function appendCatalog(store, manifest) {
-  const catalog = path.join(store, 'catalog.jsonl');
-  const current = (await pathExists(catalog)) ? await readFile(catalog, 'utf8') : '';
-  const next = `${current}${JSON.stringify({
-    packageId: manifest.packageId,
-    createdAt: manifest.createdAt,
-    sourceLabel: manifest.source.label,
-    manifestDigest: manifest.manifestDigest,
-    readiness: manifest.readiness.overall,
-    relativePath: `${CAPSULE_FOLDER}/${manifest.packageId}`,
-  })}\n`;
-  await writeTextAtomic(catalog, next);
 }
 
 async function resolveSourceAndStore(sourceInput, storeInput, { createStore = false } = {}) {
@@ -361,7 +347,7 @@ export async function captureRepository({
   if (pathsOverlap(claudePreview.claudeHome, store)) {
     throw new Error('Claude home and capsule store must not overlap.');
   }
-  await initializeStore(store);
+  await initializeCapsuleRoot(store);
   const storeProbe = await probeFilesystem(store);
   if (!storeProbe.capabilities.atomicRename) {
     throw new Error('Destination store failed the atomic rename capability probe.');
@@ -385,6 +371,7 @@ export async function captureRepository({
   const startedAt = isoNow();
   await mkdir(payloadRoot, { recursive: true, mode: 0o700 });
   await mkdir(agentPayloadRoot, { recursive: true, mode: 0o700 });
+  await mkdir(path.join(staging, 'operations'), { recursive: true, mode: 0o700 });
 
   try {
     if (beforeTreeCapture) await beforeTreeCapture({ source, store, packageId });
@@ -533,7 +520,6 @@ export async function captureRepository({
       throw new Error(`Staged capsule failed validation: ${JSON.stringify(validation.errors)}`);
     }
     await rename(staging, finalPath);
-    await appendCatalog(store, manifest);
     return {
       mode: 'captured',
       capsulePath: finalPath,
@@ -669,6 +655,7 @@ export async function createRestorePlan({
     throw new Error('Repository and Claude restore destinations must be separate, non-overlapping paths.');
   }
   const validation = await validateCapsule(capsule);
+  const portableValidation = { ...validation, capsulePath: '$CAPSULE_ROOT' };
   const manifest = await readJson(path.join(capsule, 'manifest.json'));
   const blockers = [];
   if (!validation.valid) blockers.push({ code: 'capsule-invalid', errors: validation.errors });
@@ -768,7 +755,7 @@ export async function createRestorePlan({
     schema: RESTORE_PLAN_SCHEMA,
     planId: newId('plan'),
     createdAt: isoNow(),
-    capsulePath: capsule,
+    capsulePath: '$CAPSULE_ROOT',
     capsuleId: manifest.packageId,
     manifestDigest: manifest.manifestDigest,
     destination,
@@ -778,7 +765,7 @@ export async function createRestorePlan({
     git,
     destinationProbe: probe,
     claudeDestinationProbe: claudeProbe,
-    validation,
+    validation: portableValidation,
     executable: blockers.length === 0,
     blockers,
     operations,
@@ -791,6 +778,7 @@ export async function createRestorePlan({
 
 function verifyPlanDigest(plan) {
   if (plan.schema !== RESTORE_PLAN_SCHEMA) throw new Error(`Unsupported restore plan schema: ${plan.schema}`);
+  if (plan.capsulePath !== '$CAPSULE_ROOT') throw new Error('Restore plan must use the portable $CAPSULE_ROOT reference.');
   const expected = digestObject(plan, 'planDigest');
   if (expected !== plan.planDigest) throw new Error('Restore plan digest mismatch.');
 }
@@ -853,10 +841,15 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
   const planPath = path.resolve(planInput);
   const plan = await readJson(planPath);
   verifyPlanDigest(plan);
+  const planDirectory = await resolveExistingDirectory(path.dirname(planPath), 'Restore plan parent');
+  if (path.basename(planDirectory) !== 'operations') {
+    throw new Error('Restore plan must be stored directly inside its capsule operations folder.');
+  }
+  const planCapsule = await resolveExistingDirectory(path.dirname(planDirectory), 'Capsule');
   if (!plan.executable || plan.blockers.length > 0) {
     throw new Error(`Restore plan is not executable: ${JSON.stringify(plan.blockers)}`);
   }
-  const validation = await validateCapsule(plan.capsulePath);
+  const validation = await validateCapsule(planCapsule);
   if (!validation.valid || validation.manifestDigest !== plan.manifestDigest) {
     throw new Error('Capsule no longer matches the validated restore plan.');
   }
@@ -864,16 +857,18 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
   if (await pathExists(plan.claudeDestination)) {
     throw new Error(`Claude destination must not exist: ${plan.claudeDestination}`);
   }
-  const receiptPath = receiptInput
-    ? path.resolve(receiptInput)
-    : `${planPath}.receipt.json`;
+  const receiptPath = await resolveCapsuleOperationPath({
+    capsule: planCapsule,
+    requested: receiptInput,
+    filename: `${plan.planId}.receipt.json`,
+  });
   if (pathsOverlap(receiptPath, plan.destination)) {
     throw new Error('Receipt path must be outside the restored repository.');
   }
   if (pathsOverlap(receiptPath, plan.claudeDestination)) {
     throw new Error('Receipt path must be outside the restored Claude home.');
   }
-  const manifest = await readJson(path.join(plan.capsulePath, 'manifest.json'));
+  const manifest = await readJson(path.join(planCapsule, 'manifest.json'));
   const git = await probeGit(plan.git?.path ?? manifest.git.prerequisite.path);
   const parent = path.dirname(plan.destination);
   const claudeParent = path.dirname(plan.claudeDestination);
@@ -922,8 +917,8 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
   await mkdir(staging, { mode: 0o700 });
   await mkdir(claudeStaging, { mode: 0o700 });
   try {
-    await applyTreeEntries({ capsule: plan.capsulePath, staging, entries: manifest.entries, variances });
-    await applyTreeEntries({ capsule: plan.capsulePath, staging: claudeStaging, entries: mappedAgentEntries, variances });
+    await applyTreeEntries({ capsule: planCapsule, staging, entries: manifest.entries, variances });
+    await applyTreeEntries({ capsule: planCapsule, staging: claudeStaging, entries: mappedAgentEntries, variances });
 
     const treeVerification = await verifyTree(staging, manifest.entries);
     if (!treeVerification.valid) {

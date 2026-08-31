@@ -25,7 +25,7 @@
     "schema": { "const": "claude-replicant.restore-plan/v1" },
     "planId": { "type": "string" },
     "createdAt": { "type": "string" },
-    "capsulePath": { "type": "string" },
+    "capsulePath": { "const": "$CAPSULE_ROOT" },
     "capsuleId": { "type": "string" },
     "manifestDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "destination": { "type": "string" },

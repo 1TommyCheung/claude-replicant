@@ -103,9 +103,9 @@ The portable capsule schemas, inventory, readiness records, report JSON, derivat
 
 The Claude Replicant plugin is responsible for discoverability and safe orchestration. It exposes independently invocable skills/commands for at least:
 
-- **capture/backup:** choose a Claude Code project and an explicit destination store folder, preview scope/policy, and create an immutable capsule;
-- **register/open store:** select an existing capsule-store folder on the current Mac and rebuild or validate its catalog;
-- **list/inspect:** browse capsules, capture reports, inventory, validation, and restore readiness without loading raw content into the active agent context;
+- **capture/backup:** choose a Claude Code project and an explicit destination folder, preview scope/policy, and create a capsule with an immutable canonical payload;
+- **open capsule:** select one self-contained capsule folder on the current Mac and validate it directly;
+- **list/inspect:** scan `capsule/*/manifest.json` when grouping multiple capsules, then browse reports, inventory, validation, and restore readiness without creating a catalog;
 - **analyze capsule:** run a separately approved, repeatable analysis and write a derivative analysis record;
 - **inspect sessions:** view recorded session history, model identifiers where the source artifacts recorded them, and derived session summaries with provenance;
 - **derive:** create project-context, shareable, or restore packages from a selected canonical capsule;
@@ -113,20 +113,16 @@ The Claude Replicant plugin is responsible for discoverability and safe orchestr
 
 Exact command spelling is a plugin UX decision, but each command maps to a stable core operation and can be invoked without starting a new product-development task. Long-running work reports progress and writes to isolated staging; it must not rewrite the current project, Claude Code session, memory, settings, or prompt context merely because the plugin is installed or a store is opened. Capture is an explicit user action, uses a read-only view of the source, and returns a compact result. Analysis and restore are separate explicit actions. The plugin asks for the destination folder rather than assuming the project directory, home directory, or plugin installation directory.
 
-The plugin may render summaries into an agent conversation on request, but store registration, catalog browsing, validation, and capture do not automatically inject capsule content into the model context. This keeps routine backup from disrupting normal agent work or changing its disclosure boundary.
+The plugin may render summaries into an agent conversation on request, but capsule scanning, validation, and capture do not automatically inject capsule content into the model context. This keeps routine backup from disrupting normal agent work or changing its disclosure boundary.
 
 ## 5. Package model
 
-### 5.1 Folder-based capsule store
+### 5.1 Self-contained capsule folders
 
-A capsule store is a user-selected, transferable root folder. The user may choose an existing folder or explicitly create a new one. The plugin validates write access, free space, path safety, store-version compatibility, and destination filesystem capabilities before capture; it never silently falls back to another destination.
+The user selects a destination root, but the only persistent capture output beneath it is `capsule/<capsule-id>/`. The root has no store metadata, catalog, shared derivatives, receipt directory, or other sidecar state. The plugin validates write access, free space, path safety, and destination filesystem capabilities before capture; it never silently falls back to another destination.
 
 ```text
 chosen-store/
-  store.json
-  catalog.jsonl
-  tools/
-    node/                  # versioned portable validator/restore planner
   capsule/
     <capsule-id>/
       manifest.json
@@ -135,32 +131,30 @@ chosen-store/
       payload/
       capture-report.json
       capture-report.md
+      capture-report.html
       redaction-report.json
       restore-readiness.json
       validation.json
+      operations/
+        <restore-plan>.json
+        <restore-receipt>.json
+      derivatives/        # future analysis/context outputs for this capsule only
+        <derivative-id>/
+          manifest.json
+          summary.md
+          project-snapshot.html
+          observations.json
+          analysis.json
       signatures/        # optional, future-compatible
-  derivatives/
-    <capsule-id>/
-      <derivative-id>/
-        manifest.json
-        summary.md
-        project-snapshot.html
-        observations.json
-        agent-environment-profile.json  # optional analyzed derivative
-        analysis.json     # for analysis derivatives
-        payload/          # optional/type-specific
-        validation.json
 ```
 
-`store.json` identifies the store format and optional user label. `catalog.jsonl` is a convenience index of capsule IDs, project labels, capture times, types, fidelity/readiness, and relative paths. The catalog is transactional and fully rebuildable by scanning capsule manifests; it is never the authority for capsule contents. Catalog entries and manifests use store-relative logical paths, not source-machine absolute paths.
+Each `<capsule-id>/` is independently movable and zip-ready and contains all project/agent payloads, reports, validation data, operational plans, receipts, and future derivatives associated with that capture. The canonical payload and manifest remain authoritative; operational records and derivatives do not alter their hashes. Finalization uses a private staging directory inside `chosen-store/capsule/` followed by an atomic rename.
 
-Each directory under `capsule/` is a self-describing, immutable canonical capsule. Every `<capsule-id>/` directory is independently movable and zip-ready; multiple capsule directories can also be archived together. It contains all data and metadata needed for independent integrity validation, analysis, and restore planning. Finalization uses a private staging directory followed by an atomic rename; after finalization, any change creates a new capsule or derivative with its own ID. Capsules do not require the store catalog to validate or restore. A store export includes or is accompanied by the versioned portable Node CLI and schemas needed for validation and dry-run restore planning; tool checksums/version are outside capsule content and cannot change its manifest.
-
-The entire chosen store folder can be copied with Finder, an external disk, or another user-authorized transfer mechanism to a different Mac. Opening it there validates `store.json`, scans capsule manifests, reports missing/corrupt entries, and rebuilds the catalog if necessary. Transfer itself is outside the plugin's authority unless the user explicitly requests a supported transfer action.
+One capsule folder can be copied with Finder, an external disk, or another user-authorized transfer mechanism to a different Mac. Multiple complete capsule folders may be grouped in one archive without creating shared metadata outside them. Validation and restore never depend on a catalog or `store.json`.
 
 Before capture, the core probes and records the store filesystem type and observed behavior: case sensitivity/preservation, Unicode normalization/round-trip behavior, maximum filename/path behavior relevant to the source, symlink support, mode and timestamp precision, extended attributes, ACLs, BSD flags, atomic rename, and durable-write primitives. Probes use private temporary names inside the chosen store and clean them up. Failure to preserve a source-required capability produces an explicit readiness finding before bytes are copied. APFS is the reference fidelity target. On non-APFS stores, capture may proceed only when the capsule's metadata envelope can losslessly represent source semantics independent of the store; otherwise status is `action-required` or `not-ready`. The tool must never infer F0 fidelity merely from a successful file copy to exFAT, FAT, SMB, a cloud-synced folder, or another filesystem with weaker semantics.
 
-All four package types share a versioned logical envelope, although canonical capsules and derivatives have different required files. A package may be an unpacked directory in a store or a deterministic exported archive. Canonical capture does not require `summary.md`, `observations.json`, or `analysis.json`; those are derived later.
+All four package types share a versioned logical envelope. Derivatives live under their owning capsule's `derivatives/` directory. Canonical capture does not require `summary.md`, `observations.json`, or `analysis.json`; those are derived later.
 
 ### 5.2 Common manifest
 
@@ -319,7 +313,7 @@ Readiness is also domain-scoped. `repositoryData`, `gitState`, `filesystemMetada
 7. **Collect:** copy into a private staging directory under the chosen store without executing repository or artifact content. Preserve originals and record read-time races or mutations.
 8. **Preserve:** write the canonical capsule. Redaction/minimization applies to derivatives or to items explicitly excluded by the canonical capture policy; every exception becomes a readiness finding. Transform a copy, never the source.
 9. **Package:** canonicalize the manifest, hash final stored bytes, and write the inventory, factual JSON/Markdown/static-HTML capture reports, Agent Environment Profile envelope, restore-readiness assessment, redaction report, and validation inputs. No session summarization, repository interpretation, or model call is required.
-10. **Validate/finalize:** independently reopen the staged capsule, validate schema, inventory closure, hashes, path safety, provenance, and policy assertions, then atomically move it to `capsule/<capsule-id>/` and transactionally append the catalog entry.
+10. **Validate/finalize:** independently reopen the staged capsule, validate schema, inventory closure, hashes, path safety, provenance, and policy assertions, then atomically move it to `capsule/<capsule-id>/`. Nothing is written alongside the capsule container.
 11. **Return:** report the capsule ID, chosen store path, validation/readiness status, and known gaps. Offer analysis or derivation as follow-on actions rather than extending the capture operation.
 
 If source bytes change while being read, capture retries once and otherwise records both the inconsistency and a partial result. A package may not claim `complete` when requested evidence was inaccessible or unstable.
@@ -338,19 +332,19 @@ Analysis is never a capture prerequisite and may run immediately, later, repeate
 
 An analysis operation:
 
-1. validates the selected capsule and reads it without modification;
+1. validates the selected capsule and reads its canonical payload without modification;
 2. records the analyzer/core/adapter versions, selected Bun or Node runtime, model/provider identifiers when an analysis model is used, prompt/policy version, parameters, start/end time, and exact parent manifest digest;
-3. produces a new immutable derivative under `derivatives/<capsule-id>/<derivative-id>/` containing `analysis.json`, appropriate `observations.json`, an analyzed `agent-environment-profile.json` when requested, and human-readable Markdown/HTML summaries;
+3. produces a new immutable derivative under `<capsule>/derivatives/<derivative-id>/` containing `analysis.json`, appropriate `observations.json`, an analyzed `agent-environment-profile.json` when requested, and human-readable Markdown/HTML summaries;
 4. links every derived claim to source evidence where possible and labels inference, conflict, missing evidence, and confidence;
-5. validates the derivative and appends a rebuildable catalog record.
+5. validates the derivative and records it only within its owning capsule.
 
-Re-analysis with a newer parser, policy, or model creates a sibling derivative; it never updates the capsule or overwrites an earlier analysis. Users can compare derivatives and select one for follow-on context/shareable/restore actions. Repository observations, package summaries, and derived session summaries are analysis outputs unless they are direct capture facts.
+Re-analysis with a newer parser, policy, or model creates a sibling under the capsule's `derivatives/` directory; it never updates the canonical payload or overwrites an earlier analysis. Users can compare derivatives and select one for follow-on context/shareable/restore actions. Repository observations, package summaries, and derived session summaries are analysis outputs unless they are direct capture facts.
 
 ### 6.3 Core user flows
 
-1. **Capture to a chosen folder:** invoke the plugin's capture/backup skill, select the Claude Code project, choose or create a capsule-store root, review scope/privacy/readiness implications, and receive a finalized capsule ID and report.
-2. **Transfer the store:** copy or place the whole store folder on another computer using a user-chosen mechanism. Capsules retain relative references and do not depend on the original catalog or source path.
-3. **Register/open the store:** point the plugin or portable CLI at the transferred root, validate store compatibility, scan independently self-describing capsules, and rebuild/repair only the derived catalog when required.
+1. **Capture to a chosen folder:** invoke the plugin's capture/backup skill, select the Claude Code project, choose or create a destination root, review scope/readiness implications, and receive one finalized capsule folder and report.
+2. **Transfer a capsule:** copy or zip the complete `<capsule-id>/` folder. It has no dependency on files elsewhere in the chosen root.
+3. **Open a capsule:** point the plugin or portable CLI directly at the transferred capsule and validate its manifest and payloads.
 4. **Analyze separately:** select an existing capsule and run a versioned analysis without recapturing or modifying it.
 5. **Inspect evidence and results:** browse captured session history; model identifiers where actually recorded; derived session summaries; package/capture summaries; repository observations; inventory, validation, and readiness findings. Raw sensitive content is revealed only on an explicit, policy-allowed request.
 6. **Continue with follow-on actions:** select a canonical capsule and optionally a trusted analysis derivative, then create a project-context/shareable/restore package or execute an approved restore workflow.
@@ -510,7 +504,7 @@ The acceptance record is human-reviewed and machine-assisted; model wording need
 
 - JSON Schema tests for every package and normalized observation version.
 - Golden fixtures for all four package types, including partial and redacted captures.
-- Capsule-store tests for user-selected destinations, atomic finalization, immutable capsule enforcement, catalog rebuild after transfer, relative-path portability, and independent capsule validation without `store.json`.
+- Capsule-folder tests for user-selected destinations, atomic finalization, absence of store-level sidecars, in-capsule plans/receipts/derivatives, relative-path portability, and independent validation.
 - Deferred-analysis tests proving capture completion has no analysis/model dependency and repeated analyzers create immutable, fully provenanced sibling derivatives without changing canonical hashes.
 - Agent Environment Profile fixtures proving project/global scope separation; configured-versus-observed MCP states; declared-versus-log-observed APIs; project-relevant skill evidence; unknown/unavailable behavior across Claude Code and Codex adapters; stable evidence references; safe HTML rendering; and non-disclosure of seeded tokens, connection strings, sensitive endpoints, and credential-file content.
 - Fidelity/readiness fixtures proving that omissions, secrets requiring reauthentication, machine-specific paths, platform-bound binaries, and unsupported Claude Code state cannot incorrectly receive `ready` status.
@@ -548,7 +542,7 @@ Schemas use semantic versions. Readers reject unsupported major versions, tolera
 ### Phase 0 — evidence, contracts, and threat model
 
 - Run the synthetic Claude Code restorability spike described in Section 11.1 across a different absolute path and isolated destination Mac. Publish an artifact-by-artifact evidence table and permit native reinjection only for proven version/path combinations; otherwise adopt the F2 handoff fallback.
-- Finalize measurable comparable-context criteria, plugin/core boundaries, capsule-store/catalog schemas, canonical JSON, Agent Environment Profile and integration-neutral report schemas, the version 1 `restore-plan.schema.json` contract, F0 metadata envelope, live-consistency/readiness codes, Git safety rules, secret denylist, runtime support matrix, and threat model.
+- Finalize measurable comparable-context criteria, plugin/core boundaries, self-contained capsule schemas, canonical JSON, Agent Environment Profile and integration-neutral report schemas, the version 1 `restore-plan.schema.json` contract, F0 metadata envelope, live-consistency/readiness codes, Git safety rules, secret denylist, runtime support matrix, and threat model.
 - Pin and publish the exact supported Node.js version range used by the Phase 1 reference path before any conformance result is claimed reproducible; record the exact runtime version in every fixture result.
 - Build the Section 12.1 fixture and secret/corruption corpus before ingesting real sessions.
 
@@ -562,7 +556,7 @@ Schemas use semantic versions. Readers reject unsupported major versions, tolera
 ### Phase 2 — Bun-first parity and portability hardening
 
 - Add runtime selection and the Bun implementation as the preferred healthy path, retaining the Node reference path; require semantic package parity and Bun-created/Node-validated transfer tests.
-- Harden APFS/non-APFS capability probing, metadata envelopes, live-write detection, inert Git observation, crash-safe staging, store catalog rebuilding, and the portable Node transfer CLI.
+- Harden APFS/non-APFS capability probing, metadata envelopes, live-write detection, inert Git observation, crash-safe staging, capsule-folder scanning, and the portable Node transfer CLI.
 - Harden the already-isolated Part 1 restore path across supported Mac/filesystem combinations; keep in-place overwrite and dependency installation disabled.
 
 ### Phase 3 — plugin surface and scoped adapters
@@ -591,8 +585,8 @@ Schemas use semantic versions. Readers reject unsupported major versions, tolera
 - Exact supported Bun and Node.js version ranges for the first release.
 - Which Claude Code and Codex local artifact versions can be restored natively rather than represented as handoff context.
 - Retention defaults and secure deletion guarantees on APFS.
-- Store locking/concurrent-writer policy and catalog compaction strategy.
-- Whether exported single-capsule archives carry a minimal synthetic store wrapper.
+- Capsule-root locking and concurrent-writer policy without shared persistent metadata.
+- Deterministic single-capsule archive layout without a synthetic store wrapper.
 
 These decisions do not alter the core invariants: one standalone, portable package model and shared core, agent-specific behavior confined to thin versioned adapters, and an immutable F0 migration capsule that remains authoritative over every lossy derivative.
 

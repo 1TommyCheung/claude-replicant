@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-import path from 'node:path';
 import { writeJsonAtomic } from './util.mjs';
 import {
   captureRepository,
   createRestorePlan,
+  resolveCapsuleOperationPath,
   restoreFromPlan,
   validateCapsule,
 } from './core.mjs';
@@ -14,14 +14,15 @@ const HELP = `Claude Replicant Part 1
 Usage:
   node src/cli.mjs capture --source <repo> --store <folder> [--claude-home <folder>] [--confirm]
   node src/cli.mjs validate --capsule <capsule>
-  node src/cli.mjs plan --capsule <capsule> --destination <new-path> [--claude-destination <new-path>] [--output <plan.json>]
-  node src/cli.mjs restore --plan <plan.json> --approve [--receipt <receipt.json>]
+  node src/cli.mjs plan --capsule <capsule> --destination <new-path> [--claude-destination <new-path>] [--output <capsule/operations/name.json>]
+  node src/cli.mjs restore --plan <capsule/operations/plan.json> --approve [--receipt <capsule/operations/name.json>]
 
 Safety:
   capture previews by default and writes only with --confirm.
   restore requires --approve and refuses an existing destination.
   capture includes restorable Claude Code sessions and agent state from CLAUDE_CONFIG_DIR.
   restore writes an isolated Claude home (default: <destination>.claude-home).
+  plans and receipts are stored only inside the capsule operations folder.
 `;
 
 function parseArgs(argv) {
@@ -75,11 +76,13 @@ async function main() {
       destination: options.destination,
       claudeDestination: options.claudeDestination,
     });
-    if (options.output) {
-      const output = path.resolve(options.output);
-      await writeJsonAtomic(output, result);
-      result = { ...result, output };
-    }
+    const output = await resolveCapsuleOperationPath({
+      capsule: options.capsule,
+      requested: options.output,
+      filename: `${result.planId}.json`,
+    });
+    await writeJsonAtomic(output, result);
+    result = { ...result, output };
     if (!result.executable) process.exitCode = 3;
   } else if (command === 'restore') {
     if (!options.plan) throw new Error('restore requires --plan.');

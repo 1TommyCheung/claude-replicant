@@ -22,17 +22,17 @@ Use the deterministic CLI at `scripts/claude-replicant.mjs` in this plugin root.
 2. Run `node <plugin-root>/scripts/claude-replicant.mjs capture --source <source> --store <store>` without `--confirm`. Add `--claude-home <path>` only when the user uses a nonstandard Claude configuration directory. This is a read-only preview.
 3. Present the resolved paths, repository and Claude-state candidate/session counts, Git/layout findings, exclusions policy, and secret-bearing warning.
 4. Only after explicit approval, repeat the command with `--confirm`.
-5. Report the self-contained capsule path as `<store>/capsule/<capsule-id>/`, its static `capture-report.html`, manifest digest, validation result, domain readiness, and limitations. Non-ready repository, Git, or agent-state domains do not qualify as a complete restorable capture.
+5. Report the self-contained capsule path as `<store>/capsule/<capsule-id>/`, its static `capture-report.html`, manifest digest, validation result, domain readiness, and limitations. Capture must not create `store.json`, catalogs, derivative folders, receipt folders, or any other files alongside the capsule. Non-ready repository, Git, or agent-state domains do not qualify as a complete restorable capture.
 
 ## Validate and plan
 
 - Validate read-only with `validate --capsule <capsule>`. Stop on any hash, manifest, path, or report error.
-- Create a plan with `plan --capsule <capsule> --destination <nonexistent-path> --claude-destination <nonexistent-claude-home> --output <plan.json>`. If omitted, the isolated Claude home defaults to `<destination>.claude-home`.
+- Create a plan with `plan --capsule <capsule> --destination <nonexistent-path> --claude-destination <nonexistent-claude-home>`. The CLI writes it under `<capsule>/operations/`; an `--output` override is allowed only when it names a direct child of that same folder. If omitted, the isolated Claude home defaults to `<destination>.claude-home`.
 - Keep the plan outside the destination. Show blockers and declared variances; do not describe a non-executable plan as restorable.
 
 ## Restore
 
 1. Confirm the capsule validates, the plan is executable, both destinations are exact and nonexistent, and the user has reviewed variances.
 2. Ask for explicit approval immediately before the write.
-3. Run `restore --plan <plan.json> --approve --receipt <receipt.json>` with the receipt outside the destination.
+3. Run `restore --plan <capsule>/operations/<plan.json> --approve`. The receipt is written to the same capsule `operations/` folder. A `--receipt` override is allowed only within that folder.
 4. Report post-restore repository, Git, and Claude-state verification, the receipt path, and the returned `CLAUDE_CONFIG_DIR=<restored-home>` activation value. If restore fails, do not improvise an overwrite or destructive cleanup.

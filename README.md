@@ -6,7 +6,7 @@ Portable, integrity-checked migration capsules for Claude Code projects and othe
 
 ## Overview
 
-Claude Replicant captures a selected Git repository and its locally available Claude Code state into an immutable, self-describing capsule. This includes project sessions, memory, subagents, file history, plans, tasks, skills, commands, plugins, hooks, settings, and the repository working tree/Git state.
+Claude Replicant captures a selected Git repository and its locally available Claude Code state into a self-describing capsule with an immutable, hash-verified canonical payload. This includes project sessions, memory, subagents, file history, plans, tasks, skills, commands, plugins, hooks, settings, and the repository working tree/Git state. Operational plans, receipts, and future derivatives may be added only inside their dedicated capsule subfolders.
 
 Each capture is finalized as:
 
@@ -19,6 +19,9 @@ Each capture is finalized as:
         ├── payload/
         │   ├── repository/
         │   └── claude-home/
+        ├── operations/
+        │   ├── <restore-plan>.json
+        │   └── <restore-receipt>.json
         ├── capture-report.json
         ├── capture-report.md
         ├── capture-report.html
@@ -27,7 +30,7 @@ Each capture is finalized as:
         └── validation.json
 ```
 
-Every `<capsule-id>/` directory is independently movable and zip-ready. You can transfer one capsule by itself or archive several capsule directories together.
+Every `<capsule-id>/` directory is the complete unit: payloads, reports, validation, restore plans, and restore receipts all stay inside it. Capture creates no `store.json`, catalog, derivatives, receipts, or other files alongside the capsule. You can transfer or zip one capsule by itself, or group several complete capsule directories into one archive.
 
 ## What we are trying to achieve
 
@@ -158,17 +161,15 @@ Create a dry-run restore plan:
 node scripts/claude-replicant.mjs plan \
   --capsule /path/to/capsule-store/capsule/<capsule-id> \
   --destination /path/to/new-repository \
-  --claude-destination /path/to/new-claude-home \
-  --output /path/to/restore-plan.json
+  --claude-destination /path/to/new-claude-home
 ```
 
 Execute an approved restore only after reviewing the plan:
 
 ```sh
 node scripts/claude-replicant.mjs restore \
-  --plan /path/to/restore-plan.json \
-  --approve \
-  --receipt /path/to/restore-receipt.json
+  --plan /path/to/capsule-store/capsule/<capsule-id>/operations/<plan-id>.json \
+  --approve
 ```
 
 The restore receipt reports the activation value. Start Claude Code against the isolated restored state with:
@@ -178,7 +179,7 @@ cd /path/to/new-repository
 CLAUDE_CONFIG_DIR=/path/to/new-claude-home claude
 ```
 
-When `--claude-home` is omitted, capture uses `CLAUDE_CONFIG_DIR` and then `~/.claude`. When `--claude-destination` is omitted, planning uses `<new-repository>.claude-home`.
+When `--claude-home` is omitted, capture uses `CLAUDE_CONFIG_DIR` and then `~/.claude`. When `--claude-destination` is omitted, planning uses `<new-repository>.claude-home`. Plan and receipt output paths outside the capsule are rejected.
 
 Run `node src/cli.mjs help` for the complete command summary.
 
@@ -194,7 +195,7 @@ Capture, integrity validation, corruption refusal, dry-run planning, isolated re
 2. **Gold-standard capsules:** establish reviewed Claude Code capsules as canonical training/evaluation material that other agents can learn from or be grounded against, while retaining source provenance and measurable fidelity.
 3. **Cross-agent continuity:** let different coding agents continue from the same verified project record without pretending their hidden internal states are interchangeable.
 
-Part 2 derivatives will never replace or rewrite the canonical Part 1 capsule. Automated model training is not part of the current implementation.
+Part 2 derivatives will live under their parent capsule so the directory remains self-contained; they will never replace the canonical payload. Automated model training is not part of the current implementation.
 
 ## Development
 

@@ -9,6 +9,8 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
+  realpath,
   readlink,
   rm,
   symlink,
@@ -180,11 +182,13 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   assert.equal(captured.validation.valid, true);
   assert.equal(captured.capsulePath, path.join(store, 'capsule', captured.packageId));
   await assert.rejects(lstat(path.join(store, 'capsules')));
-  const catalogEntries = (await readFile(path.join(store, 'catalog.jsonl'), 'utf8'))
-    .trim()
-    .split('\n')
-    .map((line) => JSON.parse(line));
-  assert.equal(catalogEntries.at(-1).relativePath, `capsule/${captured.packageId}`);
+  assert.deepEqual(await readdir(store), ['capsule']);
+  assert.deepEqual(await readdir(path.join(store, 'capsule')), [captured.packageId]);
+  assert.equal((await lstat(path.join(captured.capsulePath, 'operations'))).isDirectory(), true);
+  await assert.rejects(lstat(path.join(store, 'store.json')));
+  await assert.rejects(lstat(path.join(store, 'catalog.jsonl')));
+  await assert.rejects(lstat(path.join(store, 'derivatives')));
+  await assert.rejects(lstat(path.join(store, 'receipts')));
   await assert.rejects(lstat(executionMarker));
 
   const validation = await validateCapsule(captured.capsulePath);
@@ -222,17 +226,49 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   assert.ok(corruptedValidation.errors.some((error) => error.code === 'payload-hash-mismatch'));
 
   const destination = path.join(root, 'restored-project');
-  const planPath = path.join(root, 'restore-plan.json');
+  const planPath = path.join(captured.capsulePath, 'operations', 'restore-plan.json');
   const plan = await createRestorePlan({ capsule: captured.capsulePath, destination });
   assert.equal(plan.executable, true, JSON.stringify(plan.blockers));
+  assert.equal(plan.capsulePath, '$CAPSULE_ROOT');
+  assert.equal(plan.validation.capsulePath, '$CAPSULE_ROOT');
   await writeJsonAtomic(planPath, plan);
 
+  const cliPlanResult = await execFileAsync(process.execPath, [
+    path.join(import.meta.dirname, '..', 'scripts', 'claude-replicant.mjs'),
+    'plan',
+    '--capsule',
+    captured.capsulePath,
+    '--destination',
+    path.join(root, 'cli-restored-project'),
+  ], { encoding: 'utf8', timeout: 15_000, maxBuffer: 16 * 1024 * 1024 });
+  const cliPlan = JSON.parse(cliPlanResult.stdout);
+  assert.equal(
+    await realpath(path.dirname(cliPlan.output)),
+    await realpath(path.join(captured.capsulePath, 'operations')),
+  );
+  assert.equal((await lstat(cliPlan.output)).isFile(), true);
+
+  const movedCapsule = path.join(root, 'transferred-capsule');
+  await cp(captured.capsulePath, movedCapsule, { recursive: true, verbatimSymlinks: true });
+  const movedPlanPath = path.join(movedCapsule, 'operations', 'restore-plan.json');
+
+  const outsidePlanPath = path.join(root, 'outside-restore-plan.json');
+  await writeJsonAtomic(outsidePlanPath, plan);
   await assert.rejects(
-    restoreFromPlan({ plan: planPath, approve: false }),
+    restoreFromPlan({ plan: outsidePlanPath, approve: true }),
+    /inside its capsule operations folder/,
+  );
+
+  await assert.rejects(
+    restoreFromPlan({ plan: movedPlanPath, approve: false }),
     /explicit --approve/,
   );
-  const receiptPath = path.join(root, 'restore-receipt.json');
-  const receipt = await restoreFromPlan({ plan: planPath, approve: true, receipt: receiptPath });
+  await assert.rejects(
+    restoreFromPlan({ plan: movedPlanPath, approve: true, receipt: path.join(root, 'outside-receipt.json') }),
+    /inside the capsule operations folder/,
+  );
+  const receiptPath = path.join(movedCapsule, 'operations', 'restore-receipt.json');
+  const receipt = await restoreFromPlan({ plan: movedPlanPath, approve: true, receipt: receiptPath });
   assert.equal(receipt.result, 'restored-and-verified');
   assert.equal(receipt.treeVerification.valid, true);
   assert.equal(receipt.gitVerification.valid, true);
@@ -262,7 +298,11 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   assert.match(await readFile(path.join(receipt.claudeDestination, '.claude.json'), 'utf8'), /mcpServers/);
 
   await assert.rejects(
-    restoreFromPlan({ plan: planPath, approve: true, receipt: path.join(root, 'second.json') }),
+    restoreFromPlan({
+      plan: movedPlanPath,
+      approve: true,
+      receipt: path.join(movedCapsule, 'operations', 'second.json'),
+    }),
     /Destination must not exist/,
   );
 });
