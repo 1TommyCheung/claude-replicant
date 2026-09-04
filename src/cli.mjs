@@ -21,6 +21,7 @@ Safety:
   capture previews by default and writes only with --confirm.
   restore requires --approve and refuses an existing destination.
   capture includes restorable Claude Code sessions and agent state from CLAUDE_CONFIG_DIR.
+  --source is authoritative for session discovery; unrelated working directories are not captured merely for mentioning it.
   Git is auto-detected: projects without .git use folder mode and do not require Git.
   Projects with .git retain strict Git capture and require Git >=2.39.0 <3.0.0.
   restore writes an isolated Claude home (default: <destination>.claude-home).

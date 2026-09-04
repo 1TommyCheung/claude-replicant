@@ -40,14 +40,23 @@ function equivalentMacPaths(projectPath) {
     : [resolved, `/private${resolved}`];
 }
 
-async function fileMentionsProject(filePath, source) {
+async function fileRecordsProjectCwd(filePath, source) {
   const handle = await open(filePath, 'r').catch(() => null);
   if (!handle) return false;
   try {
     const buffer = Buffer.alloc(1024 * 1024);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
     const text = buffer.subarray(0, bytesRead).toString('utf8');
-    return text.includes(JSON.stringify(source)) || text.includes(`"cwd":"${source}"`);
+    const sourceVariants = new Set(equivalentMacPaths(source));
+    return text.split('\n').some((line) => {
+      if (!line.trim()) return false;
+      try {
+        const record = JSON.parse(line);
+        return typeof record.cwd === 'string' && sourceVariants.has(record.cwd);
+      } catch {
+        return false;
+      }
+    });
   } finally {
     await handle.close();
   }
@@ -70,9 +79,7 @@ async function locateProjectDirectory(claudeHome, source) {
       descend: () => false,
     });
     for (const candidate of candidates) {
-      if ((await Promise.all(
-        equivalentMacPaths(source).map((sourceVariant) => fileMentionsProject(candidate.absolutePath, sourceVariant)),
-      )).some(Boolean)) {
+      if (await fileRecordsProjectCwd(candidate.absolutePath, source)) {
         return { key: dirent.name, path: candidateRoot, method: 'session-cwd-evidence' };
       }
     }
@@ -219,7 +226,7 @@ export async function captureClaudeState({
     },
     source: {
       adapter: 'claude-code',
-      adapterVersion: '1.1.1',
+      adapterVersion: '1.1.2',
       rootAlias: '$CLAUDE_CONFIG_DIR',
       absolutePathStored: true,
       sourceProjectPath: source,

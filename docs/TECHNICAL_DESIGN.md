@@ -1,6 +1,6 @@
 # Claude Replicant: Technical Design
 
-Specification version: 0.5.0
+Specification version: 0.5.1
 
 Status: Part 1 implemented; Part 2 analysis and gold-standard cross-agent work remains planned
 
@@ -360,6 +360,8 @@ Re-analysis with a newer parser, policy, or model creates a sibling under the ca
 ## 7. Claude Code evidence discovery
 
 Claude Code artifact layouts and formats may change. The Claude Code adapter therefore owns a versioned set of locators and parsers rather than embedding assumed paths in the core. The default scope is **project-scoped only**: artifacts must be attributable to the selected project by location or validated internal project identity. User-global history, memory, instructions, settings, logs, caches, and account state are excluded by default. Each user-global artifact requires a deliberate, per-artifact opt-in with a preview, reason, sensitivity classification, and inventory decision; a blanket “include my Claude directory” choice is not permitted.
+
+The explicit source path is authoritative for Claude session ownership. The adapter first checks the exact path-derived Claude project key. A fallback project key is eligible only when a structured transcript record has a `cwd` equal to the selected source path, including the equivalent macOS `/private` path form. A source path appearing only in prompt text, tool input, output, or other transcript content is not project-identity evidence and must not cause that transcript directory to be captured. If no eligible Claude project directory exists, capture stops instead of substituting sessions from the invoking agent's current or parent working directory.
 
 Candidate project-scoped evidence includes:
 

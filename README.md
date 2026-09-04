@@ -4,7 +4,7 @@ Portable, integrity-checked migration capsules for Claude Code projects and othe
 
 > **Status:** Part 1 is ready. It captures, validates, and restores a Git repository or ordinary project folder together with locally available Claude Code state, including path-remapped native session resume on another computer. Part 2—analysis and gold-standard cross-agent context—is planned for later.
 
-Current release: **v0.5.0**. See the [changelog](docs/CHANGELOG.md) for release-level changes and the [development log](docs/DEVELOPMENT_LOG.md) for implementation decisions and verification history.
+Current release: **v0.5.1**. See the [changelog](docs/CHANGELOG.md) for release-level changes and the [development log](docs/DEVELOPMENT_LOG.md) for implementation decisions and verification history.
 
 ## Overview
 
@@ -58,6 +58,7 @@ A capsule is secret-bearing by design. Session transcripts and agent state are c
 Part 1 is the tested migration foundation. It currently supports:
 
 - explicit selection of one source project and one non-overlapping capsule store;
+- source-path-authoritative Claude session discovery: an exact Claude project key is preferred, and fallback discovery requires a transcript's structured `cwd` to equal the selected source rather than merely mentioning its path;
 - read-only capture preview before any files are written;
 - explicit confirmation before capture;
 - automatic `git-repository` or `folder` source detection;

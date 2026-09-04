@@ -10,7 +10,7 @@
       "name": "claude-replicant",
       "source": "./",
       "description": "Create integrity-checked, portable repository migration capsules.",
-      "version": "0.1.2"
+      "version": "0.5.1"
     }
   ]
 }

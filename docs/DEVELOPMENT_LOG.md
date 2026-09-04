@@ -2,6 +2,20 @@
 
 This log records how Claude Replicant evolved, why major design choices were made, and what evidence supports the current implementation. The changelog is the concise user-facing release record; this document is the engineering narrative.
 
+## 2026-09-04 — v0.5.1 source-authoritative session discovery
+
+### Failure
+
+A capture of `/Users/eugeneleow/Downloads/Dinogame.gg` selected the Claude project key for `/Users/eugeneleow/Downloads/Claude Files`. One transcript in that parent workspace mentioned the Dinogame path while running a migration command, so the fallback treated the mention as ownership evidence and captured all three unrelated parent-workspace sessions. None had a recorded `cwd` equal to the selected source, leaving all three non-resumable by ID for Dinogame.
+
+### Root cause and fix
+
+The fallback scanner accepted either a structured `cwd` match or the source path appearing anywhere in the first transcript megabyte. Source paths in prompts and tool inputs are not reliable project identity. The adapter now parses transcript records and accepts fallback discovery only when a record's structured `cwd` equals the explicit source path or its equivalent macOS `/private` form. The exact encoded source project key remains the preferred path. If neither form exists, capture stops rather than substituting the invoking agent's workspace.
+
+### Verification
+
+Added a regression fixture whose parent-workspace transcript mentions the selected child source in its user message; discovery must reject it. Added a positive legacy-key fixture whose structured `cwd` equals the source; discovery must retain support for that valid relocation case. The complete existing test suite passes unchanged after updating the adapter-version assertion to `1.1.2`.
+
 ## 2026-09-04 — v0.5.0 optional Git and folder mode
 
 ### Goal

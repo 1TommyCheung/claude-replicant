@@ -280,7 +280,7 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   assert.equal(manifest.readiness.domains.gitState.status, 'ready');
   assert.equal(manifest.readiness.domains.agentState.status, 'ready');
   assert.equal(manifest.policy.agentState, 'captured-with-execution-as-authorization');
-  assert.equal(manifest.agentState.adapterVersion, '1.1.1');
+  assert.equal(manifest.agentState.adapterVersion, '1.1.2');
   assert.ok(manifest.agentState.entries.some((entry) => entry.logicalPath.endsWith(`${sessionId}.jsonl`)));
   assert.ok(manifest.agentState.entries.some((entry) => entry.logicalPath.endsWith('memory/MEMORY.md')));
   assert.ok(manifest.agentState.entries.some((entry) => entry.logicalPath === 'agents/reviewer.md'));

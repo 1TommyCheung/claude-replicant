@@ -2,6 +2,20 @@
 
 All notable user-visible changes to Claude Replicant are recorded here. Versions follow semantic versioning for the plugin and CLI. Capsule schema versions are tracked independently inside generated artifacts and schema files.
 
+## 0.5.1 — 2026-09-04
+
+### Fixed
+
+- Made the explicit `--source` path authoritative for Claude Code session discovery.
+- Fallback discovery now requires a transcript's structured `cwd` to equal the selected source path; a prompt or tool record that merely mentions the source no longer associates an unrelated current or parent workspace with the capsule.
+- Capture now fails clearly when no source-owned Claude project session directory can be found instead of silently capturing sessions from the wrong workspace.
+- Bumped the Claude Code filesystem adapter to `1.1.2` and aligned the Claude Code marketplace and plugin versions at `0.5.1`.
+
+### Verified
+
+- Added regression coverage that rejects a parent-workspace session mentioning the source while retaining support for legacy project keys whose transcript `cwd` proves source ownership.
+- Re-ran the full Git-backed capture, validation, corruption refusal, plan, restore, and native-resume fixture plus the Git-free folder-mode fixture.
+
 ## 0.5.0 — 2026-09-04
 
 ### Added
