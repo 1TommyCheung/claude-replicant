@@ -1,6 +1,6 @@
 {
   "name": "claude-replicant",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "description": "Capture complete Claude Code projects and natively resume restored sessions.",
   "author": {
     "name": "1TommyCheung",
@@ -11,8 +11,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Claude Replicant",
-    "shortDescription": "Migrate repositories with Claude Code memory.",
-    "longDescription": "Claude Replicant creates integrity-checked capsules containing a repository plus Claude Code sessions, memory, agents, plans, and configuration, then path-remaps and restores sessions for native Claude Code resume on another computer.",
+    "shortDescription": "Migrate projects with Claude Code memory.",
+    "longDescription": "Claude Replicant creates integrity-checked capsules containing a Git repository or ordinary folder plus Claude Code sessions, memory, agents, plans, and configuration, then path-remaps and restores sessions for native Claude Code resume on another computer.",
     "developerName": "1TommyCheung",
     "category": "Productivity",
     "capabilities": [
@@ -20,9 +20,9 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Back up a repository and its Claude Code state to a capsule store.",
-      "Validate an existing repository capsule.",
-      "Plan a repository and Claude-state restore to isolated destinations."
+      "Back up a project and its Claude Code state to a capsule store.",
+      "Validate an existing project capsule.",
+      "Plan a project and Claude-state restore to isolated destinations."
     ]
   }
 }

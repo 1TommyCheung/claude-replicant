@@ -2,6 +2,25 @@
 
 All notable user-visible changes to Claude Replicant are recorded here. Versions follow semantic versioning for the plugin and CLI. Capsule schema versions are tracked independently inside generated artifacts and schema files.
 
+## 0.5.0 — 2026-09-04
+
+### Added
+
+- Added automatic source detection for Git repositories and ordinary project folders.
+- A source without `.git` now uses `folder` mode and completes capture, validation, restore planning, restoration, Claude path remapping, and native session-resume verification without invoking Git.
+- Manifests, capture reports, restore plans, readiness domains, and receipts now declare the source type and report Git as either applicable and verified or `not-applicable`.
+
+### Compatibility and safety
+
+- A source containing `.git` continues to use the existing strict Git-backed contract and still requires Git `>=2.39.0 <3.0.0`; it is never silently downgraded to folder mode.
+- Existing capsules without the additive `source.kind` field remain Git-backed for backward compatibility.
+- Folder capture compares the source tree before and after collection and refuses finalization if directory membership changes.
+
+### Verified
+
+- Added a Git-free end-to-end fixture that runs with no executable available through `PATH` and proves preview, capture, validation, planning, full restore, content verification, Claude project-key remapping, and session resume readiness.
+- Re-ran the existing hostile Git repository, corruption, transfer, legacy metadata, and full restore fixture unchanged.
+
 ## 0.4.4 — 2026-09-01
 
 ### Fixed

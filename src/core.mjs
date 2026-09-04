@@ -69,6 +69,34 @@ const REPORT_FILES = [
 ];
 
 const CAPSULE_FOLDER = 'capsule';
+const GIT_SOURCE_KIND = 'git-repository';
+const FOLDER_SOURCE_KIND = 'folder';
+
+async function detectSourceKind(source) {
+  const dotGit = await lstat(path.join(source, '.git')).catch(() => null);
+  return dotGit ? GIT_SOURCE_KIND : FOLDER_SOURCE_KIND;
+}
+
+function capsuleUsesGit(manifest) {
+  return manifest.source?.kind !== FOLDER_SOURCE_KIND;
+}
+
+function notApplicableGitLayout() {
+  return {
+    layout: 'not-applicable',
+    pathBound: [],
+    actualRestoreSupported: true,
+  };
+}
+
+function notApplicableGitVerification() {
+  return {
+    applicable: false,
+    valid: true,
+    status: 'not-applicable',
+    mismatches: [],
+  };
+}
 
 export async function resolveCapsuleOperationPath({ capsule: capsuleInput, requested, filename }) {
   const capsule = await resolveExistingDirectory(path.resolve(capsuleInput), 'Capsule');
@@ -103,17 +131,20 @@ function agentEnvironmentProfile(agentCapture) {
   };
 }
 
-function readinessFrom({ capture, agentCapture, gitLayout, gitStable, filesystemProbe }) {
+function readinessFrom({ capture, agentCapture, sourceKind, gitLayout, gitStable, filesystemProbe }) {
   const repoFindings = capture.findings.filter((finding) =>
     ['source-changed-during-capture', 'special-file-not-captured'].includes(finding.code));
-  const gitFindings = [
-    ...gitLayout.pathBound.map((binding) => ({
-      code: `git-path-bound:${binding.kind}`,
-      severity: 'blocker',
-    })),
-    ...capture.findings.filter((finding) => finding.code === 'git-lock-present'),
-    ...(gitStable ? [] : [{ code: 'git-state-changed-during-capture', severity: 'blocker' }]),
-  ];
+  const gitApplicable = sourceKind === GIT_SOURCE_KIND;
+  const gitFindings = gitApplicable
+    ? [
+        ...gitLayout.pathBound.map((binding) => ({
+          code: `git-path-bound:${binding.kind}`,
+          severity: 'blocker',
+        })),
+        ...capture.findings.filter((finding) => finding.code === 'git-lock-present'),
+        ...(gitStable ? [] : [{ code: 'git-state-changed-during-capture', severity: 'blocker' }]),
+      ]
+    : [{ code: 'git-not-applicable', severity: 'informational' }];
   const metadataFindings = [
     {
       code: 'metadata-unobserved:xattrs-acls-bsd-flags',
@@ -137,7 +168,9 @@ function readinessFrom({ capture, agentCapture, gitLayout, gitStable, filesystem
       findings: repoFindings,
     },
     gitState: {
-      status: gitFindings.length === 0 && gitLayout.actualRestoreSupported ? 'ready' : 'not-ready',
+      status: gitApplicable
+        ? gitFindings.length === 0 && gitLayout.actualRestoreSupported ? 'ready' : 'not-ready'
+        : 'not-applicable',
       findings: gitFindings,
     },
     filesystemMetadata: { status: 'action-required', findings: metadataFindings },
@@ -215,6 +248,8 @@ function captureMarkdown(report) {
     '',
     `- Capsule: ${report.packageId}`,
     `- Source label: ${report.sourceLabel}`,
+    `- Source type: ${report.sourceKind}`,
+    `- Git: ${report.sourceKind === GIT_SOURCE_KIND ? 'captured and verified' : 'not applicable'}`,
     `- Captured: ${report.createdAt}`,
     `- Included entries: ${report.totals.entries}`,
     `- Included bytes: ${report.totals.bytes}`,
@@ -232,7 +267,7 @@ function captureMarkdown(report) {
     '',
     ...sessionRows,
     '',
-    'After restore, start Claude Code from the restored repository with the receipt’s `CLAUDE_CONFIG_DIR`, then run `claude --resume` or a listed `claude --resume <session-id>` command.',
+    'After restore, start Claude Code from the restored project with the receipt’s `CLAUDE_CONFIG_DIR`, then run `claude --resume` or a listed `claude --resume <session-id>` command.',
     '',
   ].join('\n');
 }
@@ -256,9 +291,9 @@ function captureHtml(report) {
 <title>Claude Replicant Capture Report</title><style>
 body{font:16px/1.5 system-ui,sans-serif;max-width:1100px;margin:3rem auto;padding:0 1.25rem;color:#17202a}h1{margin-bottom:.25rem}.card{border:1px solid #d9dee5;border-radius:12px;padding:1rem 1.25rem;margin:1rem 0}dt{font-weight:700}dd{margin:0 0 .6rem}code{overflow-wrap:anywhere}table{width:100%;border-collapse:collapse}th,td{text-align:left;vertical-align:top;border-bottom:1px solid #d9dee5;padding:.55rem}.warning{background:#fff8df;border-color:#e8c55d}
 </style></head><body><h1>Claude Replicant Capture Report</h1><p>Self-contained migration capsule</p>
-<section class="card"><dl><dt>Capsule</dt><dd><code>${escapeHtml(report.packageId)}</code></dd><dt>Project</dt><dd>${escapeHtml(report.sourceLabel)}</dd><dt>Captured</dt><dd>${escapeHtml(report.createdAt)}</dd><dt>Readiness</dt><dd>${escapeHtml(report.readiness)}</dd></dl></section>
-<section class="card"><h2>Contents</h2><ul><li>${report.repository.entries} repository entries (${report.repository.bytes} bytes)</li><li>${report.agentState.entries} Claude state entries (${report.agentState.bytes} bytes)</li><li>${report.agentState.sessionCount} Claude sessions (${report.agentState.directlyResumable} directly resumable by ID)</li></ul></section>
-<section class="card"><h2>Captured Claude Code sessions</h2><table><thead><tr><th>Session ID</th><th>Title / first prompt</th><th>Updated</th><th>Messages</th><th>Branch</th><th>Resume</th></tr></thead><tbody>${sessionRows}</tbody></table><p>After restore, launch Claude Code from the restored repository with the receipt’s <code>CLAUDE_CONFIG_DIR</code>, then use <code>claude --resume</code> or a listed session ID.</p></section>
+<section class="card"><dl><dt>Capsule</dt><dd><code>${escapeHtml(report.packageId)}</code></dd><dt>Project</dt><dd>${escapeHtml(report.sourceLabel)}</dd><dt>Source type</dt><dd>${escapeHtml(report.sourceKind)}</dd><dt>Git</dt><dd>${report.sourceKind === GIT_SOURCE_KIND ? 'Captured and verified' : 'Not applicable'}</dd><dt>Captured</dt><dd>${escapeHtml(report.createdAt)}</dd><dt>Readiness</dt><dd>${escapeHtml(report.readiness)}</dd></dl></section>
+<section class="card"><h2>Contents</h2><ul><li>${report.repository.entries} project entries (${report.repository.bytes} bytes)</li><li>${report.agentState.entries} Claude state entries (${report.agentState.bytes} bytes)</li><li>${report.agentState.sessionCount} Claude sessions (${report.agentState.directlyResumable} directly resumable by ID)</li></ul></section>
+<section class="card"><h2>Captured Claude Code sessions</h2><table><thead><tr><th>Session ID</th><th>Title / first prompt</th><th>Updated</th><th>Messages</th><th>Branch</th><th>Resume</th></tr></thead><tbody>${sessionRows}</tbody></table><p>After restore, launch Claude Code from the restored project with the receipt’s <code>CLAUDE_CONFIG_DIR</code>, then use <code>claude --resume</code> or a listed session ID.</p></section>
 <section class="card warning"><h2>Handling</h2><ul>${warnings}</ul></section>
 <p>This static report contains no scripts or remote resources. See <code>manifest.json</code> and <code>inventory.jsonl</code> for authoritative evidence.</p></body></html>\n`;
 }
@@ -272,7 +307,9 @@ function restoreMarkdown(receipt) {
     '# Claude Replicant Restore Report',
     '',
     `- Capsule: ${receipt.capsuleId}`,
-    `- Repository: ${receipt.destination}`,
+    `- Source type: ${receipt.sourceKind}`,
+    `- Project: ${receipt.destination}`,
+    `- Git verification: ${receipt.gitVerification.applicable ? receipt.gitVerification.valid ? 'verified' : 'failed' : 'not applicable'}`,
     `- Claude home: ${receipt.claudeDestination}`,
     `- Native resume readiness: ${receipt.nativeResumeReadiness.valid ? 'verified' : 'failed'}`,
     `- Restored sessions: ${receipt.resume.sessions.length}`,
@@ -294,7 +331,7 @@ function restoreMarkdown(receipt) {
 
 function restoreHtml(receipt) {
   const rows = receipt.resume.sessions.map((session) => `<tr><td><code>${escapeHtml(session.sessionId)}</code></td><td>${escapeHtml(session.title)}</td><td><code>CLAUDE_CONFIG_DIR=${escapeHtml(shellQuote(receipt.claudeDestination))} ${escapeHtml(session.command)}</code></td></tr>`).join('');
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Claude Replicant Restore Report</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:1000px;margin:3rem auto;padding:0 1.25rem;color:#17202a}section{border:1px solid #d9dee5;border-radius:12px;padding:1rem 1.25rem;margin:1rem 0}table{width:100%;border-collapse:collapse}th,td{text-align:left;vertical-align:top;border-bottom:1px solid #d9dee5;padding:.55rem}code{overflow-wrap:anywhere}.ok{color:#176b35;font-weight:700}</style></head><body><h1>Claude Replicant Restore Report</h1><section><p class="ok">Native resume layout verified</p><dl><dt>Repository</dt><dd><code>${escapeHtml(receipt.destination)}</code></dd><dt>Claude home</dt><dd><code>${escapeHtml(receipt.claudeDestination)}</code></dd></dl><p>Run from the restored repository:</p><pre><code>CLAUDE_CONFIG_DIR=${escapeHtml(shellQuote(receipt.claudeDestination))} claude --resume</code></pre></section><section><h2>Restored sessions</h2><table><thead><tr><th>Session ID</th><th>Title / first prompt</th><th>Direct resume</th></tr></thead><tbody>${rows}</tbody></table></section></body></html>\n`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Claude Replicant Restore Report</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:1000px;margin:3rem auto;padding:0 1.25rem;color:#17202a}section{border:1px solid #d9dee5;border-radius:12px;padding:1rem 1.25rem;margin:1rem 0}table{width:100%;border-collapse:collapse}th,td{text-align:left;vertical-align:top;border-bottom:1px solid #d9dee5;padding:.55rem}code{overflow-wrap:anywhere}.ok{color:#176b35;font-weight:700}</style></head><body><h1>Claude Replicant Restore Report</h1><section><p class="ok">Native resume layout verified</p><dl><dt>Source type</dt><dd>${escapeHtml(receipt.sourceKind)}</dd><dt>Project</dt><dd><code>${escapeHtml(receipt.destination)}</code></dd><dt>Git verification</dt><dd>${receipt.gitVerification.applicable ? receipt.gitVerification.valid ? 'Verified' : 'Failed' : 'Not applicable'}</dd><dt>Claude home</dt><dd><code>${escapeHtml(receipt.claudeDestination)}</code></dd></dl><p>Run from the restored project:</p><pre><code>CLAUDE_CONFIG_DIR=${escapeHtml(shellQuote(receipt.claudeDestination))} claude --resume</code></pre></section><section><h2>Restored sessions</h2><table><thead><tr><th>Session ID</th><th>Title / first prompt</th><th>Direct resume</th></tr></thead><tbody>${rows}</tbody></table></section></body></html>\n`;
 }
 
 function filterStatusForPolicyExclusions(snapshot, excludedPaths) {
@@ -360,7 +397,7 @@ async function resolveSourceAndStore(sourceInput, storeInput, { createStore = fa
   }
   const overlapBase = (await pathExists(store)) ? await resolveExistingDirectory(store, 'Store') : store;
   if (pathsOverlap(source, overlapBase)) {
-    throw new Error('Source repository and capsule store must not overlap.');
+    throw new Error('Source project and capsule store must not overlap.');
   }
   return { source, store };
 }
@@ -374,10 +411,34 @@ export async function previewCapture({
   assertNodeVersion();
   if (!sourceInput || !storeInput) throw new Error('Capture requires explicit --source and --store paths.');
   const { source, store } = await resolveSourceAndStore(sourceInput, storeInput);
-  const git = await probeGit(gitPath);
-  const gitLayout = await inspectGitLayout(source);
+  const sourceKind = await detectSourceKind(source);
   const candidates = await walkTree(source);
   const claude = await previewClaudeState({ source, claudeHome });
+  if (sourceKind === FOLDER_SOURCE_KIND) {
+    return {
+      mode: 'preview',
+      source,
+      sourceKind,
+      store,
+      candidateEntries: candidates.length,
+      claudeState: {
+        rootAlias: '$CLAUDE_CONFIG_DIR',
+        projectKey: claude.projectKey,
+        discoveryMethod: claude.discoveryMethod,
+        sessionCount: claude.sessionIds.length,
+        candidateEntries: claude.candidates.length + claude.adjacentCandidates.length,
+      },
+      git: { applicable: false, status: 'not-applicable', layout: 'not-applicable' },
+      warnings: [
+        'No files were written. Re-run with --confirm to create a capsule.',
+        'Git is not applicable because the selected source has no .git entry.',
+        'Known credential files are excluded.',
+        'Claude Code sessions and agent state will be captured as confidential, restorable data.',
+      ],
+    };
+  }
+  const git = await probeGit(gitPath);
+  const gitLayout = await inspectGitLayout(source);
   if (!gitLayout.actualRestoreSupported) {
     return {
       mode: 'preview',
@@ -390,15 +451,16 @@ export async function previewCapture({
         sessionCount: claude.sessionIds.length,
         candidateEntries: claude.candidates.length + claude.adjacentCandidates.length,
       },
-      git: { ...git, layout: gitLayout.layout, pathBound: gitLayout.pathBound },
+      git: { applicable: true, ...git, layout: gitLayout.layout, pathBound: gitLayout.pathBound },
       blockers: [{ code: 'git-layout-unsupported-for-part1', findings: gitLayout.pathBound }],
-      warnings: ['No files were written. Part 1 capture cannot proceed for this Git layout.'],
+      warnings: ['No files were written. Capture cannot proceed for this Git layout.'],
     };
   }
   const gitSnapshot = await captureGitSnapshot(source, git);
   return {
     mode: 'preview',
     source,
+    sourceKind,
     store,
     candidateEntries: candidates.length,
     claudeState: {
@@ -409,6 +471,7 @@ export async function previewCapture({
       candidateEntries: claude.candidates.length + claude.adjacentCandidates.length,
     },
     git: {
+      applicable: true,
       ...git,
       layout: gitLayout.layout,
       pathBound: gitLayout.pathBound,
@@ -436,6 +499,7 @@ export async function captureRepository({
   if (!confirm) return previewCapture({ source: sourceInput, store: storeInput, claudeHome, gitPath });
   assertNodeVersion();
   const { source, store } = await resolveSourceAndStore(sourceInput, storeInput, { createStore: true });
+  const sourceKind = await detectSourceKind(source);
   const claudePreview = await previewClaudeState({ source, claudeHome });
   if (pathsOverlap(claudePreview.claudeHome, store)) {
     throw new Error('Claude home and capsule store must not overlap.');
@@ -445,12 +509,17 @@ export async function captureRepository({
   if (!storeProbe.capabilities.atomicRename) {
     throw new Error('Destination store failed the atomic rename capability probe.');
   }
-  const git = await probeGit(gitPath);
-  const gitLayout = await inspectGitLayout(source);
-  if (!gitLayout.actualRestoreSupported) {
-    throw new Error(`Part 1 does not support this Git layout: ${JSON.stringify(gitLayout.pathBound)}`);
+  let git = null;
+  let gitLayout = notApplicableGitLayout();
+  let gitBefore = null;
+  if (sourceKind === GIT_SOURCE_KIND) {
+    git = await probeGit(gitPath);
+    gitLayout = await inspectGitLayout(source);
+    if (!gitLayout.actualRestoreSupported) {
+      throw new Error(`Part 1 does not support this Git layout: ${JSON.stringify(gitLayout.pathBound)}`);
+    }
+    gitBefore = await captureGitSnapshot(source, git);
   }
-  const gitBefore = await captureGitSnapshot(source, git);
   const sourceCandidates = await walkTree(source);
   const storeCollisions = collisionFindings(sourceCandidates, storeProbe);
   if (storeCollisions.length > 0) {
@@ -471,7 +540,8 @@ export async function captureRepository({
     const captured = await captureTree({
       source,
       payloadRoot,
-      trackedPaths: gitBefore.trackedPaths,
+      trackedPaths: gitBefore?.trackedPaths ?? [],
+      candidates: sourceCandidates,
       maxEntries,
       maxBytes,
     });
@@ -485,7 +555,7 @@ export async function captureRepository({
       maxBytes: byteLimit - captured.totals.bytes,
     });
     if (captured.totals.unstableEntries > 0) {
-      throw new Error('Source changed during capture; quiesce the repository and retry.');
+      throw new Error('Source changed during capture; quiesce the project and retry.');
     }
     if (agentCaptured.totals.unstableEntries > 0) {
       throw new Error('Claude Code state changed incompatibly during capture; quiesce Claude Code and retry.');
@@ -495,18 +565,33 @@ export async function captureRepository({
       agentCapture: agentCaptured,
       sourceProjectPath: source,
     });
-    const gitAfter = await captureGitSnapshot(source, git);
-    const gitStable = gitBefore.snapshotDigest === gitAfter.snapshotDigest;
+    if (sourceKind === FOLDER_SOURCE_KIND) {
+      const sourceCandidatesAfter = await walkTree(source);
+      if (stableStringify(
+        sourceCandidates.map((candidate) => candidate.logicalPath),
+      ) !== stableStringify(sourceCandidatesAfter.map((candidate) => candidate.logicalPath))) {
+        throw new Error('Source folder structure changed during capture; quiesce the project and retry.');
+      }
+    }
+    const gitAfter = sourceKind === GIT_SOURCE_KIND ? await captureGitSnapshot(source, git) : null;
+    const gitStable = sourceKind === GIT_SOURCE_KIND
+      ? gitBefore.snapshotDigest === gitAfter.snapshotDigest
+      : null;
     const excludedPaths = captured.inventory
       .filter((record) => record.decision === 'excluded' && (
         record.sensitivity === 'credential' || record.reason === 'platform-metadata-policy'
       ))
       .map((record) => record.logicalPath);
-    const expectedGitBefore = filterStatusForPolicyExclusions(comparableGitSnapshot(gitBefore), excludedPaths);
-    const expectedGitAfter = filterStatusForPolicyExclusions(comparableGitSnapshot(gitAfter), excludedPaths);
+    const expectedGitBefore = sourceKind === GIT_SOURCE_KIND
+      ? filterStatusForPolicyExclusions(comparableGitSnapshot(gitBefore), excludedPaths)
+      : null;
+    const expectedGitAfter = sourceKind === GIT_SOURCE_KIND
+      ? filterStatusForPolicyExclusions(comparableGitSnapshot(gitAfter), excludedPaths)
+      : null;
     const readiness = readinessFrom({
       capture: captured,
       agentCapture: agentCaptured,
+      sourceKind,
       gitLayout,
       gitStable,
       filesystemProbe: storeProbe,
@@ -524,6 +609,7 @@ export async function captureRepository({
       createdAt: isoNow(),
       captureWindow: { startedAt, endedAt: isoNow() },
       sourceLabel: path.basename(source),
+      sourceKind,
       totals: combinedTotals,
       repository: captured.totals,
       agentState: {
@@ -573,6 +659,7 @@ export async function captureRepository({
       createdAt: report.createdAt,
       source: {
         label: path.basename(source),
+        kind: sourceKind,
         absolutePathStored: true,
         originalPath: source,
         projectRootAlias: '$PROJECT_ROOT',
@@ -585,7 +672,7 @@ export async function captureRepository({
       },
       filesystem: { sourcePlatform: process.platform, storeProbe },
       policy: {
-        scope: 'repository-plus-restorable-claude-code-state',
+        scope: 'project-plus-restorable-claude-code-state',
         credentials: 'excluded-no-encryption-envelope',
         agentState: 'captured-with-execution-as-authorization',
         repositoryCodeExecution: 'forbidden',
@@ -595,12 +682,15 @@ export async function captureRepository({
         },
       },
       git: {
+        applicable: sourceKind === GIT_SOURCE_KIND,
         prerequisite: git,
         layout: gitLayout,
         before: expectedGitBefore,
         after: expectedGitAfter,
         stable: gitStable,
-        reconstruction: 'byte-for-byte-dot-git-and-index',
+        reconstruction: sourceKind === GIT_SOURCE_KIND
+          ? 'byte-for-byte-dot-git-and-index'
+          : 'not-applicable',
       },
       entries: captured.entries,
       agentState: {
@@ -633,6 +723,7 @@ export async function captureRepository({
       mode: 'captured',
       capsulePath: finalPath,
       packageId,
+      sourceKind,
       manifestDigest: manifest.manifestDigest,
       validation,
       readiness,
@@ -660,6 +751,28 @@ export async function validateCapsule(capsuleInput) {
   const expectedManifestDigest = digestObject(manifest, 'manifestDigest');
   if (expectedManifestDigest !== manifest.manifestDigest) {
     errors.push({ code: 'manifest-digest-mismatch' });
+  }
+  const sourceKind = manifest.source?.kind ?? GIT_SOURCE_KIND;
+  if (![GIT_SOURCE_KIND, FOLDER_SOURCE_KIND].includes(sourceKind)) {
+    errors.push({ code: 'unsupported-source-kind', actual: sourceKind });
+  }
+  if (sourceKind === FOLDER_SOURCE_KIND) {
+    if (manifest.git?.applicable !== false || manifest.git?.before !== null || manifest.git?.after !== null) {
+      errors.push({ code: 'folder-source-git-contract-mismatch' });
+    }
+    if (manifest.git?.reconstruction !== 'not-applicable') {
+      errors.push({ code: 'folder-source-git-reconstruction-mismatch' });
+    }
+    if (manifest.readiness?.domains?.gitState?.status !== 'not-applicable') {
+      errors.push({ code: 'folder-source-git-readiness-mismatch' });
+    }
+    if ((manifest.entries ?? []).some((entry) => (
+      entry.logicalPath === '.git' || entry.logicalPath.startsWith('.git/')
+    ))) {
+      errors.push({ code: 'folder-source-contains-git-state' });
+    }
+  } else if (manifest.git?.applicable === false) {
+    errors.push({ code: 'git-source-marked-not-applicable' });
   }
 
   const entryGroups = [
@@ -797,21 +910,24 @@ export async function createRestorePlan({
   const portableValidation = { ...validation, capsulePath: '$CAPSULE_ROOT' };
   const manifest = await readJson(path.join(capsule, 'manifest.json'));
   const effectiveEntries = restorableEntries(manifest);
+  const gitApplicable = capsuleUsesGit(manifest);
   const blockers = [];
   if (!validation.valid) blockers.push({ code: 'capsule-invalid', errors: validation.errors });
   if (manifest.readiness.domains.repositoryData.status === 'not-ready') {
     blockers.push({ code: 'repository-data-not-ready' });
   }
-  if (manifest.readiness.domains.gitState.status !== 'ready') {
+  if (gitApplicable && manifest.readiness.domains.gitState.status !== 'ready') {
     blockers.push({ code: 'git-state-not-ready', findings: manifest.readiness.domains.gitState.findings });
   }
   if (manifest.readiness.domains.agentState.status !== 'ready') {
     blockers.push({ code: 'agent-state-not-ready', findings: manifest.readiness.domains.agentState.findings });
   }
-  const git = await probeGit('git').catch((error) => {
-    blockers.push({ code: 'git-prerequisite-unavailable', message: error.message });
-    return null;
-  });
+  const git = gitApplicable
+    ? await probeGit('git').catch((error) => {
+        blockers.push({ code: 'git-prerequisite-unavailable', message: error.message });
+        return null;
+      })
+    : null;
   const probe = await destinationProbe(destination);
   const claudeProbe = await destinationProbe(claudeDestination);
   if (!probe.capabilities.atomicRename) blockers.push({ code: 'destination-atomic-rename-unavailable' });
@@ -899,6 +1015,7 @@ export async function createRestorePlan({
     capsulePath: '$CAPSULE_ROOT',
     capsuleId: manifest.packageId,
     manifestDigest: manifest.manifestDigest,
+    sourceKind: manifest.source?.kind ?? GIT_SOURCE_KIND,
     destination,
     claudeDestination,
     activation: `CLAUDE_CONFIG_DIR=${claudeDestination}`,
@@ -966,7 +1083,13 @@ async function verifyGitAfterRestore({ destination, manifest, git }) {
   const mismatches = fields
     .filter((field) => stableStringify(expected[field]) !== stableStringify(actual[field]))
     .map((field) => ({ field, expected: expected[field], actual: actual[field] }));
-  return { valid: mismatches.length === 0, mismatches, snapshot: actual };
+  return {
+    applicable: true,
+    valid: mismatches.length === 0,
+    status: mismatches.length === 0 ? 'verified' : 'failed',
+    mismatches,
+    snapshot: actual,
+  };
 }
 
 async function applyTreeEntries({ capsule, staging, entries, variances }) {
@@ -1020,7 +1143,7 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
     filename: `${plan.planId}.receipt.html`,
   });
   if (pathsOverlap(receiptPath, plan.destination)) {
-    throw new Error('Receipt path must be outside the restored repository.');
+    throw new Error('Receipt path must be outside the restored project.');
   }
   if (pathsOverlap(receiptPath, plan.claudeDestination)) {
     throw new Error('Receipt path must be outside the restored Claude home.');
@@ -1028,7 +1151,10 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
   const manifest = await readJson(path.join(planCapsule, 'manifest.json'));
   const effectiveEntries = restorableEntries(manifest);
   const sessionCatalog = await readJson(path.join(planCapsule, 'sessions.json'));
-  const git = await probeGit(plan.git?.path ?? manifest.git.prerequisite.path);
+  const gitApplicable = capsuleUsesGit(manifest);
+  const git = gitApplicable
+    ? await probeGit(plan.git?.path ?? manifest.git.prerequisite.path)
+    : null;
   const parent = path.dirname(plan.destination);
   const claudeParent = path.dirname(plan.claudeDestination);
   await ensureDirectory(parent, 'Destination parent');
@@ -1084,7 +1210,9 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
     if (!treeVerification.valid) {
       throw new Error(`Restored tree verification failed: ${JSON.stringify(treeVerification.errors)}`);
     }
-    const gitVerification = await verifyGitAfterRestore({ destination: staging, manifest, git });
+    const gitVerification = gitApplicable
+      ? await verifyGitAfterRestore({ destination: staging, manifest, git })
+      : notApplicableGitVerification();
     if (!gitVerification.valid) {
       throw new Error(`Restored Git verification failed: ${JSON.stringify(gitVerification.mismatches)}`);
     }
@@ -1123,7 +1251,9 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
       throw error;
     }
     const postRenameTree = await verifyTree(plan.destination, effectiveEntries.repository);
-    const postRenameGit = await verifyGitAfterRestore({ destination: plan.destination, manifest, git });
+    const postRenameGit = gitApplicable
+      ? await verifyGitAfterRestore({ destination: plan.destination, manifest, git })
+      : notApplicableGitVerification();
     const postRenameAgent = await verifyTree(plan.claudeDestination, pathRemap.runtimeEntries);
     if (!postRenameTree.valid || !postRenameGit.valid || !postRenameAgent.valid) {
       throw new Error('Post-rename verification failed; restored destination retained for diagnosis.');
@@ -1135,6 +1265,7 @@ export async function restoreFromPlan({ plan: planInput, approve = false, receip
       planDigest: plan.planDigest,
       capsuleId: manifest.packageId,
       manifestDigest: manifest.manifestDigest,
+      sourceKind: manifest.source?.kind ?? GIT_SOURCE_KIND,
       destination: plan.destination,
       claudeDestination: plan.claudeDestination,
       activation: plan.activation,

@@ -128,7 +128,7 @@ export async function previewClaudeState({ source, claudeHome: claudeHomeInput }
   const claudeHome = await resolveExistingDirectory(path.resolve(configuredHome), 'Claude home');
   const project = await locateProjectDirectory(claudeHome, source);
   if (!project) {
-    throw new Error(`No Claude Code project session directory matches the selected repository in ${claudeHome}/projects.`);
+    throw new Error(`No Claude Code project session directory matches the selected project in ${claudeHome}/projects.`);
   }
   const projectCandidates = await walkTree(project.path);
   const sessionIds = sessionIdsFrom(

@@ -12,7 +12,7 @@ import {
 const HELP = `Claude Replicant Part 1
 
 Usage:
-  node src/cli.mjs capture --source <repo> --store <folder> [--claude-home <folder>] [--confirm]
+  node src/cli.mjs capture --source <project> --store <folder> [--claude-home <folder>] [--confirm]
   node src/cli.mjs validate --capsule <capsule>
   node src/cli.mjs plan --capsule <capsule> --destination <new-path> [--claude-destination <new-path>] [--output <capsule/operations/name.json>]
   node src/cli.mjs restore --plan <capsule/operations/plan.json> --approve [--receipt <capsule/operations/name.json>]
@@ -21,6 +21,8 @@ Safety:
   capture previews by default and writes only with --confirm.
   restore requires --approve and refuses an existing destination.
   capture includes restorable Claude Code sessions and agent state from CLAUDE_CONFIG_DIR.
+  Git is auto-detected: projects without .git use folder mode and do not require Git.
+  Projects with .git retain strict Git capture and require Git >=2.39.0 <3.0.0.
   restore writes an isolated Claude home (default: <destination>.claude-home).
   plans and receipts are stored only inside the capsule operations folder.
 `;

@@ -20,6 +20,21 @@
   "properties": {
     "schemaVersion": { "const": "1.0.0" },
     "packageType": { "const": "forensic-backup" },
+    "source": {
+      "type": "object",
+      "properties": {
+        "kind": { "enum": ["git-repository", "folder"] }
+      },
+      "additionalProperties": true
+    },
+    "git": {
+      "type": "object",
+      "properties": {
+        "applicable": { "type": "boolean" },
+        "reconstruction": { "enum": ["byte-for-byte-dot-git-and-index", "not-applicable"] }
+      },
+      "additionalProperties": true
+    },
     "agentState": {
       "type": "object",
       "required": ["adapter", "rootAlias", "projectKey", "sessionIds", "sessionCatalog", "entries", "reconstruction"],

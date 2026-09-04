@@ -2,6 +2,25 @@
 
 This log records how Claude Replicant evolved, why major design choices were made, and what evidence supports the current implementation. The changelog is the concise user-facing release record; this document is the engineering narrative.
 
+## 2026-09-04 — v0.5.0 optional Git and folder mode
+
+### Goal
+
+Make Git optional for projects that are ordinary folders while retaining full Git fidelity whenever a source is already a repository.
+
+### Design
+
+- Detect source type from the presence of `<source>/.git`.
+- Use `git-repository` mode when `.git` exists. Preserve the existing safe Git probe, layout checks, snapshots, reconstruction, and post-restore verification; missing or incompatible Git remains a blocker.
+- Use `folder` mode when `.git` does not exist. Do not probe or invoke Git during preview, capture, planning, or restore.
+- Record `source.kind`, `git.applicable`, null Git snapshots/prerequisites, `git.reconstruction: not-applicable`, and `readiness.domains.gitState.status: not-applicable` so absence of Git is explicit rather than presented as a failure.
+- Treat capsules without `source.kind` as Git-backed to preserve compatibility with releases through v0.4.4.
+- Compare the folder's sorted logical-path set before and after collection and abort if membership changes; per-file fingerprint checks continue to detect content mutation during reads.
+
+### Verification
+
+The folder-mode fixture uses a source with no `.git`, a matching synthetic Claude Code session, a known credential file that must remain excluded, and an intentionally unusable Git path. It removes executable discovery from `PATH` during planning and restore, then requires a verified restored project, `gitVerification.status: not-applicable`, destination path remapping, and native session resume readiness. The existing Git-backed fixture still passes its full branch/refs/index/status and hostile-hook protections.
+
 ## 2026-09-01 — v0.4.4 Finder metadata validation fix
 
 ### Failure

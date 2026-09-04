@@ -210,8 +210,21 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   const { repository, claudeSession, claudeHome, sessionId, secondSessionId, executionMarker } = await createFixture(root);
   const store = path.join(root, 'capsule-store');
 
+  await assert.rejects(
+    captureRepository({
+      source: repository,
+      store,
+      claudeHome,
+      gitPath: path.join(root, 'git-is-not-installed'),
+      confirm: false,
+    }),
+    /Git is required/,
+  );
+
   const preview = await captureRepository({ source: repository, store, claudeHome, confirm: false });
   assert.equal(preview.mode, 'preview');
+  assert.equal(preview.sourceKind, 'git-repository');
+  assert.equal(preview.git.applicable, true);
   assert.equal(preview.claudeState.sessionCount, 2);
   await assert.rejects(lstat(store));
 
@@ -236,6 +249,7 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   });
   await waitForExit(writer);
   assert.equal(captured.mode, 'captured');
+  assert.equal(captured.sourceKind, 'git-repository');
   assert.equal(captured.validation.valid, true);
   assert.equal(captured.capsulePath, path.join(store, 'capsule', captured.packageId));
   await assert.rejects(lstat(path.join(store, 'capsules')));
@@ -258,6 +272,8 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   ], { encoding: 'utf8', timeout: 15_000, maxBuffer: 16 * 1024 * 1024 });
   assert.equal(JSON.parse(cliValidation.stdout).valid, true);
   const manifest = await readJson(path.join(captured.capsulePath, 'manifest.json'));
+  assert.equal(manifest.source.kind, 'git-repository');
+  assert.equal(manifest.git.applicable, true);
   assert.ok(manifest.findings.some((finding) => finding.code === 'credential-excluded'));
   assert.ok(manifest.findings.some((finding) => finding.code === 'live-append-stable-prefix'));
   assert.equal(manifest.readiness.domains.repositoryData.status, 'ready');
@@ -343,6 +359,8 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   });
   legacyManifest.git.before.status = `${legacyManifest.git.before.status}\n? .DS_Store`;
   legacyManifest.git.after.status = `${legacyManifest.git.after.status}\n? .DS_Store`;
+  delete legacyManifest.source.kind;
+  delete legacyManifest.git.applicable;
   legacyManifest.manifestDigest = digestObject(legacyManifest, 'manifestDigest');
   await writeJsonAtomic(legacyManifestPath, legacyManifest);
   await appendFile(legacyPayloadPath, 'finder changed it after capture\n');
@@ -357,6 +375,7 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   const legacyDestination = path.join(root, 'legacy-restored-project');
   const legacyPlan = await createRestorePlan({ capsule: legacyCapsule, destination: legacyDestination });
   assert.equal(legacyPlan.executable, true, JSON.stringify(legacyPlan.blockers));
+  assert.equal(legacyPlan.sourceKind, 'git-repository');
   assert.equal(legacyPlan.operations.some((operation) => operation.logicalPath === '.DS_Store'), false);
   const legacyPlanPath = path.join(legacyCapsule, 'operations', 'legacy-restore-plan.json');
   await writeJsonAtomic(legacyPlanPath, legacyPlan);
@@ -421,6 +440,9 @@ test('Part 1 captures, validates, rejects corruption, plans, restores, and verif
   const receiptPath = path.join(movedCapsule, 'operations', 'restore-receipt.json');
   const receipt = await restoreFromPlan({ plan: movedPlanPath, approve: true, receipt: receiptPath });
   assert.equal(receipt.result, 'restored-and-verified');
+  assert.equal(receipt.sourceKind, 'git-repository');
+  assert.equal(receipt.gitVerification.applicable, true);
+  assert.equal(receipt.gitVerification.status, 'verified');
   assert.equal(receipt.treeVerification.valid, true);
   assert.equal(receipt.gitVerification.valid, true);
   assert.equal(receipt.agentStateVerification.valid, true);

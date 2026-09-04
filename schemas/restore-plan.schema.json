@@ -28,6 +28,7 @@
     "capsulePath": { "const": "$CAPSULE_ROOT" },
     "capsuleId": { "type": "string" },
     "manifestDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sourceKind": { "enum": ["git-repository", "folder"] },
     "destination": { "type": "string" },
     "claudeDestination": { "type": "string" },
     "activation": { "type": "string" },
